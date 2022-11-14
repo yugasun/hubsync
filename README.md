@@ -8,9 +8,9 @@
 
 ## 方案一
 
-要求：严格按照模板规范提交，参考： https://github.com/yugasun/hubsync/issues/1
+要求：严格按照模板规范提交，参考： https://github.com/yugasun/hubsync/issues/2
 
-限制：每次提交最多 11 个镜像地址
+> 限制：每次提交最多 11 个镜像地址
 
 > Docker 账号有每日镜像拉取限额，请勿滥用
 

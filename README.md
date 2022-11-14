@@ -4,10 +4,6 @@
 
 > 为减少重复请求，合理利用资源，建议提前在 issues 搜索镜像是否已转换过
 
-# 原理
-
-https://mp.weixin.qq.com/s/Vt0FRTx1PsoYFdLa0QZzWw
-
 # 开始使用
 
 ## 方案一
@@ -27,8 +23,6 @@ https://mp.weixin.qq.com/s/Vt0FRTx1PsoYFdLa0QZzWw
 2. 开启 `Settings`-`Options`-`Features` 中的 `Issues` 功能
 
 3. 在 `Issues`-`Labels` 选择 `New label` 依次添加三个 label ：`hubsync`、`success`、`failure`
-
-4. 在 `Actions` 里选择 `hubsync` ，在右边 `···` 菜单里选择 `Enable Workflow`
 
 ## 方案三：本地执行
 
@@ -53,3 +47,7 @@ go run main.go --username=xxxxxx --password=xxxxxx --content='{ "hubsync": ["hel
 # 如果需要使用自定义镜像仓库
 go run main.go --username=xxxxxx --password=xxxxxx --repository=registry.cn-hangzhou.aliyuncs.com/xxxxxx --content='{ "hubsync": ["hello-world:latest"] }'
 ```
+
+## License
+
+MIT

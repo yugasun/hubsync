@@ -48,8 +48,8 @@ go install
 3. 执行同步：
 
 ```shell
-go run main.go --username=xxxxxx --password=xxxxxx --content='{ "hubsync": ["gcr.io/google-samples/microservices-demo/emailservice:v0.3.5","hello-world:latest"] }'
+go run main.go --username=xxxxxx --password=xxxxxx --content='{ "hubsync": ["hello-world:latest" }'
 
 # 如果需要使用自定义镜像仓库
-go run main.go --username=xxxxxx --password=xxxxxx --repository=registry.cn-hangzhou.aliyuncs.com/xxxxxx --content='{ "hubsync": ["gcr.io/google-samples/microservices-demo/emailservice:v0.3.5","hello-world:latest"] }'
+go run main.go --username=xxxxxx --password=xxxxxx --repository=registry.cn-hangzhou.aliyuncs.com/xxxxxx --content='{ "hubsync": ["hello-world:latest"] }'
 ```

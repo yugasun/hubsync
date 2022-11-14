@@ -17,12 +17,12 @@ import (
 )
 
 var (
-	content    = pflag.StringP("content", "", "", "原始镜像，格式为：{ \"hub-mirror\": [] }")
+	content    = pflag.StringP("content", "", "", "原始镜像，格式为：{ \"hubsync\": [] }")
 	maxContent = pflag.IntP("maxContent", "", 10, "原始镜像个数限制")
 	username   = pflag.StringP("username", "", "", "docker hub 用户名")
 	password   = pflag.StringP("password", "", "", "docker hub 密码")
-	outputPath = pflag.StringP("outputPath", "", "output.sh", "结果输出路径")
-	repository = pflag.StringP("repository", "", "", "仓库地址,如果为空,默认推到dockerHub")
+	outputPath = pflag.StringP("outputPath", "", "output.log", "结果输出路径")
+	repository = pflag.StringP("repository", "", "", "仓库地址,如果为空,默认推到 DockerHub")
 )
 
 func main() {
@@ -30,7 +30,7 @@ func main() {
 
 	fmt.Println("验证原始镜像内容")
 	var hubMirrors struct {
-		Content []string `json:"hub-mirror"`
+		Content []string `json:"hubsync"`
 	}
 	err := json.Unmarshal([]byte(*content), &hubMirrors)
 	if err != nil {

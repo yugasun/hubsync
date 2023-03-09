@@ -149,8 +149,8 @@ func main() {
 # if your repository is private,please login...
 # docker login {{ .Repository }} --username={your username}
 {{end}}	
-docker pull {{ .Target }}
-docker tag {{ .Target }} {{ .Source }}
+docker pull {{ .Source }}
+docker tag {{ .Source }} {{ .Target }}
 
 {{ end -}}`)
 	if err != nil {

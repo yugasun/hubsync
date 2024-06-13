@@ -22,7 +22,7 @@ var (
 	username   = pflag.StringP("username", "", "", "docker hub 用户名")
 	password   = pflag.StringP("password", "", "", "docker hub 密码")
 	outputPath = pflag.StringP("outputPath", "", "output.log", "结果输出路径")
-	repository = pflag.StringP("repository", "", "", "仓库地址,如果为空,默认推到 DockerHub")
+	repository = pflag.StringP("repository", "", "", "仓库地址,如果为空,默认推到 Docker Hub")
 	// 命名空间， 默认为：yugasun
 	namespace = pflag.StringP("namespace", "", "yugasun", "命名空间")
 )
@@ -151,8 +151,7 @@ func main() {
 # if your repository is private,please login...
 # docker login {{ .Repository }} --username={your username}
 {{end}}	
-docker pull {{ .Source }}
-docker tag {{ .Source }} {{ .Target }}
+docker pull {{ .Target }}
 
 {{ end -}}`)
 	if err != nil {

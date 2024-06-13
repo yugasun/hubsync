@@ -23,6 +23,8 @@ var (
 	password   = pflag.StringP("password", "", "", "docker hub 密码")
 	outputPath = pflag.StringP("outputPath", "", "output.log", "结果输出路径")
 	repository = pflag.StringP("repository", "", "", "仓库地址,如果为空,默认推到 DockerHub")
+	// 命名空间， 默认为：yugasun
+	namespace = pflag.StringP("namespace", "", "yugasun", "命名空间")
 )
 
 func main() {
@@ -92,9 +94,9 @@ func main() {
 		// 如果为空,默认推送到 DockerHub 用户名 下
 		// 如果指定了值,则推动到指定的仓库下,用户名不一定与repository后缀相同
 		if *repository == "" {
-			target = *username + "/" + strings.ReplaceAll(target, "/", ".")
+			target = *namespace + "/" + strings.ReplaceAll(target, "/", ".")
 		} else {
-			target = *repository + "/" + strings.ReplaceAll(target, "/", ".")
+			target = *repository + "/" + *namespace + "/" + strings.ReplaceAll(target, "/", ".")
 		}
 
 		wg.Add(1)

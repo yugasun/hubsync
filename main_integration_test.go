@@ -29,17 +29,17 @@ func TestMainIntegration(t *testing.T) {
 
 	cmd := exec.Command("go", "run", "main.go",
 		"--content", string(contentBytes),
-		"--username", os.Getenv("DOCKER_USERNAME"),
-		"--password", os.Getenv("DOCKER_PASSWORD"),
 		"--outputPath", outputPath,
 	)
 	cmd.Env = append(os.Environ(),
 		"DOCKER_USERNAME="+os.Getenv("DOCKER_USERNAME"),
 		"DOCKER_PASSWORD="+os.Getenv("DOCKER_PASSWORD"),
+		"DOCKER_REPOSITORY="+os.Getenv("DOCKER_REPOSITORY"),
+		"DOCKER_NAMESPACE="+os.Getenv("DOCKER_NAMESPACE"),
 	)
 	output, err := cmd.CombinedOutput()
 	if err != nil {
-		t.Fatalf("main.go 执行失败: %v\n输出: %s", err, string(output))
+		t.Fatalf("main.go execution failed: %v\nOutput: %s", err, string(output))
 	}
 
 	// 检查输出文件内容

@@ -37,7 +37,7 @@ jobs:
         run: |
           go run main.go \
             --username=${{ secrets.DOCKER_USERNAME }} \
-            --password=${{ secrets.DOCKER_TOKEN }} \
+            --password=${{ secrets.DOCKER_PASSWORD }} \
             --repository=${{ secrets.DOCKER_REPOSITORY }} \
             --namespace=${{ secrets.DOCKER_NAMESPACE }} \
             --content='${{ github.event.issue.body }}' \

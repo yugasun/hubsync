@@ -64,7 +64,9 @@ func handleImage(cli *client.Client, source, target, repository, authStr string,
 	fmt.Println("Processing", source, "=>", target)
 	ctx := context.Background()
 
-	pullOut, err := cli.ImagePull(ctx, source, image.PullOptions{})
+	pullOut, err := cli.ImagePull(ctx, source, image.PullOptions{
+		RegistryAuth: authStr,
+	})
 	if err != nil {
 		printErrorAndExit(err, "Failed to pull image")
 	}

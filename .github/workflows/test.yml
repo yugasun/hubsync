@@ -2,9 +2,13 @@ name: Test
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
+
+env:
+  DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+  DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
 
 jobs:
   test:
@@ -29,7 +33,4 @@ jobs:
       - name: Run unit tests
         run: make test
       - name: Run integration tests
-        env:
-          DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
-          DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
         run: make integration-test

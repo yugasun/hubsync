@@ -11,160 +11,174 @@ import (
 	"sync"
 	"text/template"
 
-	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/registry"
 	"github.com/docker/docker/client"
 	"github.com/spf13/pflag"
 )
 
 var (
-	content    = pflag.StringP("content", "", "", "原始镜像，格式为：{ \"hubsync\": [] }")
-	maxContent = pflag.IntP("maxContent", "", 10, "原始镜像个数限制")
-	username   = pflag.StringP("username", "", "", "docker hub 用户名")
-	password   = pflag.StringP("password", "", "", "docker hub 密码")
-	outputPath = pflag.StringP("outputPath", "", "output.log", "结果输出路径")
-	repository = pflag.StringP("repository", "", "", "仓库地址,如果为空,默认推到 Docker Hub")
-	// 命名空间， 默认为：yugasun
-	namespace = pflag.StringP("namespace", "", "yugasun", "命名空间")
+	content    = pflag.StringP("content", "", getEnvOrDefault("CONTENT", ""), "Original images, format: { \"hubsync\": [] }")
+	maxContent = pflag.IntP("maxContent", "", getEnvOrDefaultInt("MAX_CONTENT", 10), "Limit for the number of original images")
+	username   = pflag.StringP("username", "", getEnvOrDefault("DOCKER_USERNAME", ""), "Docker Hub username")
+	password   = pflag.StringP("password", "", getEnvOrDefault("DOCKER_PASSWORD", ""), "Docker Hub password")
+	repository = pflag.StringP("repository", "", getEnvOrDefault("REPOSITORY", ""), "Repository address, default is Docker Hub if empty")
+	namespace  = pflag.StringP("namespace", "", getEnvOrDefault("NAMESPACE", "yugasun"), "Namespace, default: yugasun")
+	outputPath = pflag.StringP("outputPath", "", getEnvOrDefault("OUTPUT_PATH", "output.log"), "Output file path")
 )
+
+func getEnvOrDefault(key, def string) string {
+	if v := os.Getenv(key); v != "" {
+		return v
+	}
+	return def
+}
+
+func getEnvOrDefaultInt(key string, def int) int {
+	if v := os.Getenv(key); v != "" {
+		var i int
+		_, err := fmt.Sscanf(v, "%d", &i)
+		if err == nil {
+			return i
+		}
+	}
+	return def
+}
+
+type outputItem struct {
+	Source     string
+	Target     string
+	Repository string
+}
+
+func printErrorAndExit(err error, msg string) {
+	fmt.Fprintf(os.Stderr, "%s: %v\n", msg, err)
+	os.Exit(1)
+}
+
+func handleImage(cli *client.Client, source, target, repository, authStr string, output *[]outputItem, mu *sync.Mutex) {
+	fmt.Println("Processing", source, "=>", target)
+	ctx := context.Background()
+
+	pullOut, err := cli.ImagePull(ctx, source, image.PullOptions{})
+	if err != nil {
+		printErrorAndExit(err, "Failed to pull image")
+	}
+	defer pullOut.Close()
+	io.Copy(io.Discard, pullOut)
+
+	err = cli.ImageTag(ctx, source, target)
+	if err != nil {
+		printErrorAndExit(err, "Failed to tag image")
+	}
+
+	pushOut, err := cli.ImagePush(ctx, target, image.PushOptions{
+		RegistryAuth: authStr,
+	})
+	if err != nil {
+		printErrorAndExit(err, "Failed to push image")
+	}
+	defer pushOut.Close()
+	io.Copy(io.Discard, pushOut)
+
+	mu.Lock()
+	*output = append(*output, outputItem{Source: source, Target: target, Repository: repository})
+	mu.Unlock()
+	fmt.Println("Processed", source, "=>", target)
+}
 
 func main() {
 	pflag.Parse()
 
-	fmt.Println("验证原始镜像内容")
+	fmt.Println("Validating input images")
 	var hubMirrors struct {
 		Content []string `json:"hubsync"`
 	}
-	err := json.Unmarshal([]byte(*content), &hubMirrors)
-	if err != nil {
-		panic(err)
+	if err := json.Unmarshal([]byte(*content), &hubMirrors); err != nil {
+		printErrorAndExit(err, "Failed to parse content")
 	}
 	if len(hubMirrors.Content) > *maxContent {
-		panic("content is too long.")
+		printErrorAndExit(fmt.Errorf("%d > %d", len(hubMirrors.Content), *maxContent), "Too many images in content")
 	}
 	fmt.Printf("%+v\n", hubMirrors)
 
-	fmt.Println("连接 Docker")
+	fmt.Println("Connecting to Docker")
 	cli, err := client.NewClientWithOpts(client.FromEnv, client.WithAPIVersionNegotiation())
 	if err != nil {
-		panic(err)
+		printErrorAndExit(err, "Failed to connect to Docker")
 	}
 
-	fmt.Println("验证 Docker 用户名密码")
+	fmt.Println("Validating Docker credentials")
 	if *username == "" || *password == "" {
-		panic("username or password cannot be empty.")
+		printErrorAndExit(fmt.Errorf("username or password is empty"), "Username or password cannot be empty")
 	}
-	authConfig := types.AuthConfig{
+	authConfig := registry.AuthConfig{
 		Username:      *username,
 		Password:      *password,
 		ServerAddress: *repository,
 	}
 	encodedJSON, err := json.Marshal(authConfig)
 	if err != nil {
-		panic(err)
+		printErrorAndExit(err, "Failed to serialize authConfig")
 	}
 	authStr := base64.URLEncoding.EncodeToString(encodedJSON)
 	_, err = cli.RegistryLogin(context.Background(), authConfig)
 	if err != nil {
-		panic(err)
+		printErrorAndExit(err, "Docker login failed")
 	}
 
-	fmt.Println("开始转换镜像")
-	output := make([]struct {
-		Source     string
-		Target     string
-		Repository string
-	}, 0)
-
+	fmt.Println("Processing images")
+	var output []outputItem
+	var mu sync.Mutex
 	wg := sync.WaitGroup{}
 
-	for _, source := range hubMirrors.Content {
-		if source == "" {
+	for _, src := range hubMirrors.Content {
+		if src == "" {
 			continue
 		}
-
+		source := src
 		target := source
-		// 查看是否配置自定义镜像名，如果配置的话使用自定义镜像名
 		if strings.Contains(source, "$") {
 			str1 := strings.Split(source, "$")
-			repository := strings.Split(str1[0], ":")
-			target = str1[1] + ":" + repository[len(repository)-1]
+			repositoryParts := strings.Split(str1[0], ":")
+			target = str1[1] + ":" + repositoryParts[len(repositoryParts)-1]
 			source = str1[0]
 		}
-
-		// 如果为空,默认推送到 DockerHub 用户名 下
-		// 如果指定了值,则推动到指定的仓库下,用户名不一定与repository后缀相同
 		if *repository == "" {
 			target = *namespace + "/" + strings.ReplaceAll(target, "/", ".")
 		} else {
 			target = *repository + "/" + *namespace + "/" + strings.ReplaceAll(target, "/", ".")
 		}
-
 		wg.Add(1)
 		go func(source, target, repository string) {
 			defer wg.Done()
-
-			fmt.Println("开始转换", source, "=>", target)
-			ctx := context.Background()
-
-			// 拉取镜像
-			pullOut, err := cli.ImagePull(ctx, source, types.ImagePullOptions{})
-			if err != nil {
-				panic(err)
-			}
-			defer pullOut.Close()
-			io.Copy(os.Stdout, pullOut)
-
-			// 重新标签
-			err = cli.ImageTag(ctx, source, target)
-			if err != nil {
-				panic(err)
-			}
-
-			// 上传镜像
-			pushOut, err := cli.ImagePush(ctx, target, types.ImagePushOptions{
-				RegistryAuth: authStr,
-			})
-			if err != nil {
-				panic(err)
-			}
-			defer pushOut.Close()
-			io.Copy(os.Stdout, pushOut)
-
-			output = append(output, struct {
-				Source     string
-				Target     string
-				Repository string
-			}{Source: source, Target: target, Repository: repository})
-			fmt.Println("转换成功", source, "=>", target)
+			handleImage(cli, source, target, repository, authStr, &output, &mu)
 		}(source, target, *repository)
 	}
-
 	wg.Wait()
 
 	if len(output) == 0 {
-		panic("output is empty.")
+		printErrorAndExit(fmt.Errorf("output is empty"), "Output is empty")
 	}
 
-	tmpl, err := template.New("pull_images").Parse(`{{- range . -}}
-	
-{{if .Repository}}
-# if your repository is private,please login...
-# docker login {{ .Repository }} --username={your username}
-{{end}}	
+	// Only print login command once if repository is set
+	var loginCmd string
+	if output[0].Repository != "" {
+		loginCmd = fmt.Sprintf("# If your repository is private, please login first...\n# docker login %s --username={your username}\n", output[0].Repository)
+	}
+	tmpl, err := template.New("pull_images").Parse(loginCmd + `{{- range . -}}
 docker pull {{ .Target }}
-
 {{ end -}}`)
 	if err != nil {
-		panic(err)
+		printErrorAndExit(err, "Failed to parse template")
 	}
 	outputFile, err := os.Create(*outputPath)
 	if err != nil {
-		panic(err)
+		printErrorAndExit(err, "Failed to create output file")
 	}
 	defer outputFile.Close()
-	err = tmpl.Execute(outputFile, output)
-	if err != nil {
-		panic(err)
+	if err := tmpl.Execute(outputFile, output); err != nil {
+		printErrorAndExit(err, "Failed to execute template")
 	}
 	fmt.Println(output)
 }

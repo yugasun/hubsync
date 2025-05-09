@@ -17,14 +17,18 @@ import (
 	"github.com/spf13/pflag"
 )
 
+// Create a custom FlagSet with ContinueOnError
+var cmdLine = pflag.NewFlagSet(os.Args[0], pflag.ContinueOnError)
+
 var (
-	content    = pflag.StringP("content", "", getEnvOrDefault("CONTENT", ""), "Original images, format: { \"hubsync\": [] }")
-	maxContent = pflag.IntP("maxContent", "", getEnvOrDefaultInt("MAX_CONTENT", 10), "Limit for the number of original images")
-	username   = pflag.StringP("username", "", getEnvOrDefault("DOCKER_USERNAME", ""), "Docker Hub username")
-	password   = pflag.StringP("password", "", getEnvOrDefault("DOCKER_PASSWORD", ""), "Docker Hub password")
-	repository = pflag.StringP("repository", "", getEnvOrDefault("REPOSITORY", ""), "Repository address, default is Docker Hub if empty")
-	namespace  = pflag.StringP("namespace", "", getEnvOrDefault("NAMESPACE", "yugasun"), "Namespace, default: yugasun")
-	outputPath = pflag.StringP("outputPath", "", getEnvOrDefault("OUTPUT_PATH", "output.log"), "Output file path")
+	content    = cmdLine.StringP("content", "", getEnvOrDefault("CONTENT", ""), "Original images, format: { \"hubsync\": [] }")
+	maxContent = cmdLine.IntP("maxContent", "", getEnvOrDefaultInt("MAX_CONTENT", 10), "Limit for the number of original images")
+	username   = cmdLine.StringP("username", "", getEnvOrDefault("DOCKER_USERNAME", ""), "Docker Hub username")
+	password   = cmdLine.StringP("password", "", getEnvOrDefault("DOCKER_PASSWORD", ""), "Docker Hub password")
+	repository = cmdLine.StringP("repository", "", getEnvOrDefault("REPOSITORY", ""), "Repository address, default is Docker Hub if empty")
+	namespace  = cmdLine.StringP("namespace", "", getEnvOrDefault("NAMESPACE", "yugasun"), "Namespace, default: yugasun")
+	outputPath = cmdLine.StringP("outputPath", "", getEnvOrDefault("OUTPUT_PATH", "output.log"), "Output file path")
+	help       = cmdLine.BoolP("help", "h", false, "Show this help message")
 )
 
 func getEnvOrDefault(key, def string) string {
@@ -88,7 +92,32 @@ func handleImage(cli *client.Client, source, target, repository, authStr string,
 }
 
 func main() {
-	pflag.Parse()
+	// Custom usage message
+	cmdLine.Usage = func() {
+		fmt.Fprintf(os.Stdout, "\nHubsync - Docker Hub Sync Tool\n")
+		fmt.Fprintf(os.Stdout, "\nUsage: %s [options]\n\n", os.Args[0])
+		cmdLine.PrintDefaults()
+	}
+
+	// Parse command line
+	err := cmdLine.Parse(os.Args[1:])
+	if err != nil {
+		// If error is not for help request, print it
+		if err != pflag.ErrHelp {
+			fmt.Println(err)
+			cmdLine.Usage()
+			os.Exit(1)
+		}
+		// For help request, exit with success
+		cmdLine.Usage()
+		os.Exit(0)
+	}
+
+	// Check help flag explicitly
+	if *help {
+		cmdLine.Usage()
+		os.Exit(0)
+	}
 
 	fmt.Println("Validating input images")
 	var hubMirrors struct {

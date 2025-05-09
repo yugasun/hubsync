@@ -57,6 +57,14 @@ A tool for accelerating the download of images from foreign registries such as g
    go run main.go --username=xxxxxx --password=xxxxxx --repository=registry.cn-hangzhou.aliyuncs.com/xxxxxx --content='{ "hubsync": ["hello-world:latest"] }'
    ```
 
+### Option 4: One-line Install (macOS/Linux)
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/yugasun/hubsync/main/install.sh | bash
+```
+
+> 脚本会自动下载最新版本的 hubsync 到 /usr/local/bin/hubsync。
+
 ## License
 
 MIT @yugasun

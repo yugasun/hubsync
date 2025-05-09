@@ -17,20 +17,19 @@ jobs:
       - name: Check out repository
         uses: actions/checkout@v3
 
-      - name: Set up Go
-        uses: actions/setup-go@v4
+      - name: Setup Golang
+        uses: actions/setup-go@v5
         with:
           go-version: 1.21
-          cache: true
-
-      - name: Cache Go build
+      - name: Setup Golang caches
         uses: actions/cache@v4
         with:
-          path: ~/.cache/go-build
-          key: ${{ runner.os }}-go-${{ hashFiles('**/go.sum') }}
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-golang-${{ hashFiles('**/go.sum') }}
           restore-keys: |
-            ${{ runner.os }}-go-
-          enableCrossOsArchive: true
+            ${{ runner.os }}-golang-
 
       - name: Run Go script
         run: |

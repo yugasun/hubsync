@@ -1,5 +1,9 @@
 # hubsync
 
+[![Test](https://github.com/yugasun/hubsync/actions/workflows/test.yml/badge.svg)](https://github.com/yugasun/hubsync/actions/workflows/test.yml)
+[![Build](https://github.com/yugasun/hubsync/actions/workflows/release.yml/badge.svg)](https://github.com/yugasun/hubsync/actions/workflows/release.yml)
+[![License](https://img.shields.io/badge/license-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+
 A tool for accelerating the download of images from foreign registries such as gcr.io, k8s.gcr.io, quay.io, ghcr.io, etc., using docker.io or other mirror services.
 
 > To avoid duplicate requests and make efficient use of resources, please search the issues to see if the image has already been mirrored.

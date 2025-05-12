@@ -7,6 +7,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"text/template"
 	"time"
 
@@ -26,6 +27,18 @@ type OutputItem struct {
 	StartTime  time.Time
 	EndTime    time.Time
 	Duration   time.Duration
+	Status     string `json:"status"` // Success, Failed, or Skipped
+	ErrorMsg   string `json:"error,omitempty"`
+}
+
+// SyncStatistics holds statistics about the sync operation
+type SyncStatistics struct {
+	TotalImages     int           `json:"total_images"`
+	Successful      int           `json:"successful"`
+	Failed          int           `json:"failed"`
+	Skipped         int           `json:"skipped"`
+	TotalDuration   time.Duration `json:"total_duration"`
+	AverageDuration time.Duration `json:"average_duration"`
 }
 
 // Syncer handles the synchronization of images
@@ -34,7 +47,10 @@ type Syncer struct {
 	Client         client.DockerClientInterface
 	Output         []OutputItem
 	mutex          sync.Mutex
-	processedCount int
+	processedCount int32
+	totalCount     int32
+	startTime      time.Time
+	stats          SyncStatistics
 }
 
 // NewSyncer creates a new Syncer instance
@@ -48,41 +64,89 @@ func NewSyncer(config *config.Config, client client.DockerClientInterface) *Sync
 
 // Run processes all images with concurrency control
 func (s *Syncer) Run(ctx context.Context) error {
+	s.startTime = time.Now()
+
 	// Parse and validate the input content
 	images, err := s.parseContent()
 	if err != nil {
 		return err
 	}
 
-	log.Info().Int("count", len(images)).Msg("Processing images")
+	// Initialize statistics
+	s.stats.TotalImages = len(images)
+	atomic.StoreInt32(&s.totalCount, int32(len(images)))
+
+	log.Info().
+		Int("total_images", len(images)).
+		Int("concurrency", s.Config.Concurrency).
+		Str("start_time", s.startTime.Format(time.RFC3339)).
+		Msg("Starting image synchronization")
 
 	// Create semaphore to limit concurrency
 	sem := semaphore.NewWeighted(int64(s.Config.Concurrency))
 	g, ctx := errgroup.WithContext(ctx)
 
 	// Process images with limited concurrency
-	for _, imageName := range images {
+	for idx, imageName := range images {
 		if imageName == "" {
+			atomic.AddInt32(&s.processedCount, 1)
+			s.stats.Skipped++
+
+			log.Warn().
+				Int("index", idx+1).
+				Int("total", len(images)).
+				Float64("progress_pct", float64(idx+1)*100/float64(len(images))).
+				Msg("Empty image name skipped")
+
 			continue
 		}
 
 		// Make a copy for goroutine
 		source := imageName
+		imageIndex := idx
 
 		// Process the image
 		g.Go(func() error {
 			// Acquire semaphore
 			if err := sem.Acquire(ctx, 1); err != nil {
+				log.Error().Err(err).Str("source", source).Msg("Failed to acquire semaphore")
 				return fmt.Errorf("failed to acquire semaphore: %w", err)
 			}
 			defer sem.Release(1)
 
-			// Process image - ignore target as we don't need it here
-			source, _, err := s.ProcessImage(ctx, source)
+			// Log start of processing with progress indicator
+			log.Info().
+				Int("index", imageIndex+1).
+				Int("total", len(images)).
+				Float64("progress_pct", float64(imageIndex+1)*100/float64(len(images))).
+				Str("image", source).
+				Msg("Starting image processing")
+
+			// Process image with retries
+			source, target, err := s.ProcessImageWithRetry(ctx, source)
+
+			// Update progress counter regardless of success/failure
+			newCount := atomic.AddInt32(&s.processedCount, 1)
+
+			// Log completion status with progress
 			if err != nil {
-				log.Error().Err(err).Str("source", source).Msg("Failed to process image")
+				log.Error().
+					Err(err).
+					Str("source", source).
+					Int("processed", int(newCount)).
+					Int("total", len(images)).
+					Float64("progress_pct", float64(newCount)*100/float64(len(images))).
+					Msg("Image processing failed")
 				return err
 			}
+
+			log.Info().
+				Str("source", source).
+				Str("target", target).
+				Int("processed", int(newCount)).
+				Int("total", len(images)).
+				Float64("progress_pct", float64(newCount)*100/float64(len(images))).
+				Msg("Image processing completed")
 
 			return nil
 		})
@@ -90,35 +154,140 @@ func (s *Syncer) Run(ctx context.Context) error {
 
 	// Wait for all goroutines to complete
 	if err := g.Wait(); err != nil {
-		return err
+		// Still generate output even if some images failed
+		log.Error().Err(err).Msg("Some images failed to process")
 	}
+
+	// Calculate final statistics
+	s.stats.TotalDuration = time.Since(s.startTime)
+	if s.stats.Successful > 0 {
+		s.stats.AverageDuration = s.stats.TotalDuration / time.Duration(s.stats.Successful)
+	}
+
+	// Log completion summary
+	log.Info().
+		Int("total", s.stats.TotalImages).
+		Int("successful", s.stats.Successful).
+		Int("failed", s.stats.Failed).
+		Int("skipped", s.stats.Skipped).
+		Dur("total_duration", s.stats.TotalDuration).
+		Msg("Image synchronization completed")
 
 	// Generate output file
 	return s.generateOutput()
 }
 
-// ProcessImage processes a single image
-func (s *Syncer) ProcessImage(ctx context.Context, source string) (string, string, error) {
+// ProcessImageWithRetry processes a single image with retry logic
+func (s *Syncer) ProcessImageWithRetry(ctx context.Context, source string) (string, string, error) {
+	var lastErr error
 	startTime := time.Now()
-	log.Info().Str("image", source).Msg("Processing image")
+
+	// Default target to empty string until we generate it
+	target := ""
+
+	// Try to process the image with retries
+	for attempt := 1; attempt <= s.Config.RetryCount+1; attempt++ {
+		if attempt > 1 {
+			log.Warn().
+				Str("source", source).
+				Int("attempt", attempt).
+				Int("max_attempts", s.Config.RetryCount+1).
+				Dur("retry_delay", s.Config.RetryDelay).
+				Msg("Retrying image processing")
+
+			// Wait before retry
+			select {
+			case <-ctx.Done():
+				return source, target, fmt.Errorf("context cancelled during retry: %w", ctx.Err())
+			case <-time.After(s.Config.RetryDelay):
+				// Continue with retry
+			}
+		}
+
+		// Process the image
+		source, target, lastErr = s.processImage(ctx, source)
+		if lastErr == nil {
+			// Success, no more retries needed
+			return source, target, nil
+		}
+
+		log.Error().
+			Err(lastErr).
+			Str("source", source).
+			Int("attempt", attempt).
+			Int("max_attempts", s.Config.RetryCount+1).
+			Msg("Image processing attempt failed")
+	}
+
+	// All retries failed, record the failure
+	endTime := time.Now()
+	duration := endTime.Sub(startTime)
+
+	s.mutex.Lock()
+	s.Output = append(s.Output, OutputItem{
+		Source:     source,
+		Target:     target,
+		Repository: s.Config.Repository,
+		StartTime:  startTime,
+		EndTime:    endTime,
+		Duration:   duration,
+		Status:     "Failed",
+		ErrorMsg:   lastErr.Error(),
+	})
+	s.stats.Failed++
+	s.mutex.Unlock()
+
+	return source, target, lastErr
+}
+
+// processImage handles the core image processing logic
+func (s *Syncer) processImage(ctx context.Context, source string) (string, string, error) {
+	startTime := time.Now()
 
 	// Generate source and target names
+	log.Debug().Str("image", source).Msg("Generating target image name")
 	source, target := s.generateTargetName(source)
+	log.Info().
+		Str("source", source).
+		Str("target", target).
+		Msg("Image mapping generated")
 
 	// Pull image
+	log.Info().Str("image", source).Msg("Pulling image")
+	pullStart := time.Now()
 	if err := s.Client.PullImage(ctx, source); err != nil {
 		return source, target, fmt.Errorf("failed to pull image %s: %w", source, err)
 	}
+	log.Info().
+		Str("image", source).
+		Dur("duration", time.Since(pullStart)).
+		Msg("Image pull completed")
 
 	// Tag image
+	log.Info().
+		Str("source", source).
+		Str("target", target).
+		Msg("Tagging image")
+	tagStart := time.Now()
 	if err := s.Client.TagImage(ctx, source, target); err != nil {
 		return source, target, fmt.Errorf("failed to tag image %s as %s: %w", source, target, err)
 	}
+	log.Info().
+		Str("source", source).
+		Str("target", target).
+		Dur("duration", time.Since(tagStart)).
+		Msg("Image tag completed")
 
 	// Push image
+	log.Info().Str("image", target).Msg("Pushing image")
+	pushStart := time.Now()
 	if err := s.Client.PushImage(ctx, target); err != nil {
 		return source, target, fmt.Errorf("failed to push image %s: %w", target, err)
 	}
+	log.Info().
+		Str("image", target).
+		Dur("duration", time.Since(pushStart)).
+		Msg("Image push completed")
 
 	// Record output
 	endTime := time.Now()
@@ -132,14 +301,18 @@ func (s *Syncer) ProcessImage(ctx context.Context, source string) (string, strin
 		StartTime:  startTime,
 		EndTime:    endTime,
 		Duration:   duration,
+		Status:     "Success",
 	})
-	s.processedCount++
+	s.stats.Successful++
 	s.mutex.Unlock()
 
 	log.Info().
 		Str("source", source).
 		Str("target", target).
-		Dur("duration", duration).
+		Dur("pull_duration", time.Since(pullStart)-time.Since(tagStart)).
+		Dur("tag_duration", time.Since(tagStart)-time.Since(pushStart)).
+		Dur("push_duration", time.Since(pushStart)).
+		Dur("total_duration", duration).
 		Msg("Image processed successfully")
 
 	return source, target, nil
@@ -249,13 +422,29 @@ func (s *Syncer) generateOutput() error {
 
 	// Create template for output
 	var loginCmd string
-	if s.Output[0].Repository != "" {
+	if len(s.Output) > 0 && s.Output[0].Repository != "" {
 		loginCmd = fmt.Sprintf("# If your repository is private, please login first...\n# docker login %s --username={your username}\n\n", s.Output[0].Repository)
 	}
 
-	tmpl, err := template.New("pull_images").Parse(loginCmd + `{{- range . -}}
-docker pull {{ .Target }}
-{{ end -}}`)
+	tmpl, err := template.New("pull_images").Parse(loginCmd +
+		`# HubSync completed at {{ .Timestamp }}
+# Summary: {{ .Stats.Successful }} successful, {{ .Stats.Failed }} failed, {{ .Stats.Skipped }} skipped
+# Total duration: {{ .Stats.TotalDuration }}
+
+{{- range .Output -}}
+{{- if eq .Status "Success" }}
+docker pull {{ .Target }} # (from {{ .Source }} in {{ .Duration }})
+{{ end }}
+{{- end -}}
+
+{{ if gt .Stats.Failed 0 }}
+# The following images failed to sync:
+{{- range .Output -}}
+{{- if eq .Status "Failed" }}
+# {{ .Source }} -> {{ .Target }} ({{ .ErrorMsg }})
+{{ end }}
+{{- end -}}
+{{ end }}`)
 	if err != nil {
 		return fmt.Errorf("failed to parse template: %w", err)
 	}
@@ -267,14 +456,28 @@ docker pull {{ .Target }}
 	}
 	defer outputFile.Close()
 
+	// Prepare data for template
+	data := struct {
+		Output    []OutputItem
+		Stats     SyncStatistics
+		Timestamp string
+	}{
+		Output:    s.Output,
+		Stats:     s.stats,
+		Timestamp: time.Now().Format(time.RFC3339),
+	}
+
 	// Write to output file
-	if err := tmpl.Execute(outputFile, s.Output); err != nil {
+	if err := tmpl.Execute(outputFile, data); err != nil {
 		return fmt.Errorf("failed to execute template: %w", err)
 	}
 
 	log.Info().
 		Str("path", s.Config.OutputPath).
 		Int("count", len(s.Output)).
+		Int("successful", s.stats.Successful).
+		Int("failed", s.stats.Failed).
+		Int("skipped", s.stats.Skipped).
 		Msg("Output file created successfully")
 
 	return nil
@@ -282,5 +485,5 @@ docker pull {{ .Target }}
 
 // GetProcessedImageCount returns the number of successfully processed images
 func (s *Syncer) GetProcessedImageCount() int {
-	return s.processedCount
+	return s.stats.Successful
 }

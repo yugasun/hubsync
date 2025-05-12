@@ -16,7 +16,7 @@ import (
 	"golang.org/x/sync/semaphore"
 
 	"github.com/yugasun/hubsync/internal/config"
-	"github.com/yugasun/hubsync/pkg/client"
+	"github.com/yugasun/hubsync/pkg/docker"
 )
 
 // OutputItem represents an item in the output
@@ -44,7 +44,7 @@ type SyncStatistics struct {
 // Syncer handles the synchronization of images
 type Syncer struct {
 	Config         *config.Config
-	Client         client.DockerClientInterface
+	Client         docker.ClientInterface
 	Output         []OutputItem
 	mutex          sync.Mutex
 	processedCount int32
@@ -54,7 +54,7 @@ type Syncer struct {
 }
 
 // NewSyncer creates a new Syncer instance
-func NewSyncer(config *config.Config, client client.DockerClientInterface) *Syncer {
+func NewSyncer(config *config.Config, client docker.ClientInterface) *Syncer {
 	return &Syncer{
 		Config: config,
 		Client: client,

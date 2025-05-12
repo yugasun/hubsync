@@ -11,8 +11,8 @@ import (
 	"github.com/rs/zerolog/log"
 
 	"github.com/yugasun/hubsync/internal/config"
-	"github.com/yugasun/hubsync/pkg/client"
-	"github.com/yugasun/hubsync/pkg/sync"
+	"github.com/yugasun/hubsync/internal/di"
+	"github.com/yugasun/hubsync/pkg/errors"
 )
 
 // Run executes the main application logic
@@ -22,7 +22,16 @@ func Run(version string) error {
 	// Parse configuration from command-line flags and environment variables
 	cfg, err := config.ParseConfig()
 	if err != nil {
-		return fmt.Errorf("configuration error: %w", err)
+		return errors.NewConfigError("app", "configuration error", err)
+	}
+
+	// Set version in config
+	cfg.Version = version
+
+	// Handle version flag
+	if cfg.ShowVersion {
+		fmt.Printf("HubSync version %s\n", version)
+		return nil
 	}
 
 	// Set up context with cancellation for graceful shutdown
@@ -38,18 +47,19 @@ func Run(version string) error {
 		cancel()
 	}()
 
-	// Create Docker client
-	dockerClient, err := client.NewDockerClient(cfg.Username, cfg.Password, cfg.Repository)
-	if err != nil {
-		return fmt.Errorf("failed to initialize Docker client: %w", err)
+	// Initialize dependency injection container
+	container := di.GetInstance()
+	if err := container.Initialize(cfg); err != nil {
+		return errors.NewSystemError("app", "failed to initialize application container", err)
 	}
-	defer dockerClient.Close()
+	defer container.Cleanup()
 
 	// Create syncer with timeout
 	syncerCtx, syncerCancel := context.WithTimeout(ctx, cfg.Timeout)
 	defer syncerCancel()
 
-	syncer := sync.NewSyncer(cfg, dockerClient)
+	// Get syncer from container
+	syncer := container.GetSyncer()
 
 	// Run the sync operation
 	log.Info().Msg("Starting image synchronization")
@@ -57,7 +67,7 @@ func Run(version string) error {
 
 	err = syncer.Run(syncerCtx)
 	if err != nil {
-		return fmt.Errorf("synchronization error: %w", err)
+		return errors.NewOperationError("app", "synchronization error", err)
 	}
 
 	log.Info().

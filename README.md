@@ -1,4 +1,4 @@
-# hubsync
+# HubSync
 
 [![Test](https://github.com/yugasun/hubsync/actions/workflows/test.yml/badge.svg)](https://github.com/yugasun/hubsync/actions/workflows/test.yml)
 [![Build](https://github.com/yugasun/hubsync/actions/workflows/release.yml/badge.svg)](https://github.com/yugasun/hubsync/actions/workflows/release.yml)
@@ -16,16 +16,98 @@ A tool for accelerating the download of images from foreign registries such as g
 - Automatic `.env` file loading for easy configuration
 - Comprehensive logging and error handling
 - Multiple execution modes (CLI, GitHub Actions)
+- Multiple installation methods (script, Homebrew, Docker)
 
 ## Getting Started
 
-### Option 1: Submit via GitHub Issue
+### Option 1: Quick Start Guide
+
+The quickest way to get started is to use our interactive quickstart script:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/yugasun/hubsync/refs/heads/main/quickstart.sh | bash
+```
+
+This script will:
+- Install HubSync if not already installed
+- Guide you through setting up Docker credentials
+- Help you run your first sync job
+
+### Option 2: Install and Configure Manually
+
+#### Installation Methods
+
+Choose one of the following installation methods:
+
+**Method A: Direct Install Script (macOS/Linux)**
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/yugasun/hubsync/refs/heads/main/install.sh | bash
+```
+
+**Method B: Homebrew (macOS)**
+
+```sh
+brew tap yugasun/hubsync
+brew install hubsync
+```
+
+**Method C: Docker**
+
+```sh
+docker run -it --rm -v "$(pwd):/data" yugasun/hubsync --help
+```
+
+**Method D: Build from Source**
+
+```sh
+git clone https://github.com/yugasun/hubsync
+cd hubsync
+make build
+./bin/hubsync --help
+```
+
+#### Configuration
+
+Create a `.env` file in your working directory:
+
+```
+DOCKER_USERNAME=your_username
+DOCKER_PASSWORD=your_password
+# Optional settings:
+DOCKER_REPOSITORY=your_registry_url
+DOCKER_NAMESPACE=your_namespace
+```
+
+#### Usage
+
+Basic usage with a single image:
+
+```sh
+hubsync --content='{ "hubsync": ["nginx:latest"] }'
+```
+
+Advanced usage with multiple options:
+
+```sh
+hubsync --username=xxxxxx \
+        --password=xxxxxx \
+        --repository=registry.cn-hangzhou.aliyuncs.com \
+        --namespace=xxxxxx \
+        --concurrency=5 \
+        --timeout=10m \
+        --outputPath=sync.log \
+        --logLevel=debug \
+        --content='{ "hubsync": ["nginx:latest", "redis:alpine"] }'
+```
+
+### Option 3: Submit via GitHub Issue
 
 - **Requirement:** Strictly follow the [template](https://github.com/yugasun/hubsync/issues/2) when submitting.
 - **Limit:** Up to 11 image addresses per submission.
 - **Note:** Docker accounts have daily pull limits. Please use responsibly.
 
-### Option 2: Use GitHub Actions
+### Option 4: Use GitHub Actions
 
 1. **Bind your DockerHub account:**  
    Go to `Settings` → `Secrets` → `Actions` and add two secrets:
@@ -39,62 +121,27 @@ A tool for accelerating the download of images from foreign registries such as g
 3. **Add Labels:**  
    In `Issues` → `Labels`, add the following labels: `hubsync`, `success`, `failure`.
 
-### Option 3: Run Locally
+## Docker Support
 
-1. **Clone the repository:**
-
-   ```shell
-   git clone https://github.com/yugasun/hubsync
-   cd hubsync
-   ```
-
-2. **Install dependencies:**
-
-   ```shell
-   go mod download
-   ```
-
-3. **Build the binary:**
-
-   ```shell
-   make build
-   ```
-
-4. **Run the sync:**
-
-   ```shell
-   ./bin/hubsync --username=xxxxxx --password=xxxxxx --content='{ "hubsync": ["hello-world:latest"] }'
-   ```
-
-   **To use a custom image registry:**
-
-   ```shell
-   ./bin/hubsync --username=xxxxxx --password=xxxxxx --repository=registry.cn-hangzhou.aliyuncs.com --namespace=xxxxxx --content='{ "hubsync": ["hello-world:latest"] }'
-   ```
-
-   **With environment variables:**  
-   Create a `.env` file in the project root:
-
-   ```
-   DOCKER_USERNAME=your_username
-   DOCKER_PASSWORD=your_password
-   DOCKER_REPOSITORY=optional_registry_url
-   DOCKER_NAMESPACE=your_namespace
-   ```
-
-   Then run:
-
-   ```shell
-   ./bin/hubsync --content='{ "hubsync": ["hello-world:latest"] }'
-   ```
-
-### Option 4: One-line Install (macOS/Linux)
+HubSync is available as a Docker image for containerized environments:
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/yugasun/hubsync/main/install.sh | bash
-```
+# Pull the image
+docker pull yugasun/hubsync:latest
 
-> The script will automatically download the latest version of hubsync to /usr/local/bin/hubsync.
+# Run using environment variables
+docker run -it --rm \
+  -v "$(pwd):/data" \
+  -e DOCKER_USERNAME=your_username \
+  -e DOCKER_PASSWORD=your_password \
+  yugasun/hubsync --content='{ "hubsync": ["nginx:latest"] }'
+
+# Or run using a local .env file
+docker run -it --rm \
+  -v "$(pwd):/data" \
+  -v "$(pwd)/.env:/data/.env" \
+  yugasun/hubsync --content='{ "hubsync": ["nginx:latest"] }'
+```
 
 ## Project Architecture
 
@@ -105,10 +152,15 @@ hubsync/
 ├── internal/              # Internal packages (not meant to be imported)
 │   ├── app/              # Application core logic
 │   ├── config/           # Configuration handling
+│   ├── di/               # Dependency injection container
 │   └── utils/            # Utilities and helper functions
 ├── pkg/                   # Public packages that can be imported
-│   ├── client/           # Docker client implementation
+│   ├── docker/           # Docker client implementation
+│   ├── errors/           # Error handling and custom error types
+│   ├── observability/    # Metrics and telemetry
+│   ├── registry/         # Registry client interfaces and implementations
 │   └── sync/             # Image sync functionality
+│       └── strategies/   # Synchronization strategies (standard/parallel)
 └── test/                  # Test files and mocks
     ├── integration/      # Integration tests
     ├── mocks/            # Mock implementations
@@ -174,7 +226,7 @@ make cover
 make build
 
 # Build for all supported platforms
-make build-all
+make cross
 ```
 
 ### Code Structure

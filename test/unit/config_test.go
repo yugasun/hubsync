@@ -91,13 +91,15 @@ func TestConfigEnvironmentVars(t *testing.T) {
 func TestConfigValidation(t *testing.T) {
 	t.Run("Valid Configuration", func(t *testing.T) {
 		cfg := &config.Config{
-			Username:   "test-user",
-			Password:   "test-pass",
-			Repository: "docker.io",
-			Namespace:  "test-ns",
-			Content:    `{"hubsync": ["nginx:latest"]}`,
-			MaxContent: 10,
-			OutputPath: "output.log",
+			Username:    "test-user",
+			Password:    "test-pass",
+			Repository:  "docker.io",
+			Namespace:   "test-ns",
+			Content:     `{"hubsync": ["nginx:latest"]}`,
+			MaxContent:  10,
+			OutputPath:  "output.log",
+			LogLevel:    "info",
+			Concurrency: 1,
 		}
 
 		err := cfg.Validate()

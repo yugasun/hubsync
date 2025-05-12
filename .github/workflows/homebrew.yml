@@ -1,0 +1,70 @@
+name: Update Homebrew Formula
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  update-homebrew:
+    name: Update Homebrew Formula
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GH_TOKEN }}  # Use GH_TOKEN to push changes back to the repository
+          fetch-depth: 0  # Get full history for correct versioning
+
+      - name: Set version variable
+        id: version
+        run: |
+          VERSION=${GITHUB_REF#refs/tags/v}
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "Version: $VERSION"
+
+      - name: Download binaries and calculate SHA256
+        id: sha256
+        run: |
+          mkdir -p temp_downloads
+          
+          # Download macOS Intel binary
+          curl -sL "https://github.com/yugasun/hubsync/releases/download/v${{ steps.version.outputs.version }}/hubsync-darwin-amd64" -o temp_downloads/hubsync-darwin-amd64
+          DARWIN_AMD64_SHA256=$(sha256sum temp_downloads/hubsync-darwin-amd64 | cut -d ' ' -f1)
+          echo "darwin_amd64_sha256=$DARWIN_AMD64_SHA256" >> $GITHUB_OUTPUT
+          
+          # Download macOS Apple Silicon binary
+          curl -sL "https://github.com/yugasun/hubsync/releases/download/v${{ steps.version.outputs.version }}/hubsync-darwin-arm64" -o temp_downloads/hubsync-darwin-arm64
+          DARWIN_ARM64_SHA256=$(sha256sum temp_downloads/hubsync-darwin-arm64 | cut -d ' ' -f1)
+          echo "darwin_arm64_sha256=$DARWIN_ARM64_SHA256" >> $GITHUB_OUTPUT
+          
+          # Download Linux Intel binary
+          curl -sL "https://github.com/yugasun/hubsync/releases/download/v${{ steps.version.outputs.version }}/hubsync-linux-amd64" -o temp_downloads/hubsync-linux-amd64
+          LINUX_AMD64_SHA256=$(sha256sum temp_downloads/hubsync-linux-amd64 | cut -d ' ' -f1)
+          echo "linux_amd64_sha256=$LINUX_AMD64_SHA256" >> $GITHUB_OUTPUT
+          
+          # Download Linux ARM binary
+          curl -sL "https://github.com/yugasun/hubsync/releases/download/v${{ steps.version.outputs.version }}/hubsync-linux-arm64" -o temp_downloads/hubsync-linux-arm64
+          LINUX_ARM64_SHA256=$(sha256sum temp_downloads/hubsync-linux-arm64 | cut -d ' ' -f1)
+          echo "linux_arm64_sha256=$LINUX_ARM64_SHA256" >> $GITHUB_OUTPUT
+          
+          echo "SHA256 checksums calculated successfully"
+
+      - name: Update Homebrew formula
+        run: |
+          # Update version in the formula
+          sed -i "s/version \"[^\"]*\"/version \"${{ steps.version.outputs.version }}\"/" homebrew/hubsync.rb
+          
+          # Update SHA256 checksums for each platform
+          sed -i "s/sha256 \"REPLACE_WITH_ACTUAL_SHA256\".*# darwin amd64$/sha256 \"${{ steps.sha256.outputs.darwin_amd64_sha256 }}\"  # darwin amd64/" homebrew/hubsync.rb
+          sed -i "s/sha256 \"REPLACE_WITH_ACTUAL_SHA256\".*# darwin arm64$/sha256 \"${{ steps.sha256.outputs.darwin_arm64_sha256 }}\"  # darwin arm64/" homebrew/hubsync.rb
+          sed -i "s/sha256 \"REPLACE_WITH_ACTUAL_SHA256\".*# linux amd64$/sha256 \"${{ steps.sha256.outputs.linux_amd64_sha256 }}\"  # linux amd64/" homebrew/hubsync.rb
+          sed -i "s/sha256 \"REPLACE_WITH_ACTUAL_SHA256\".*# linux arm64$/sha256 \"${{ steps.sha256.outputs.linux_arm64_sha256 }}\"  # linux arm64/" homebrew/hubsync.rb
+
+      - name: Commit and push changes
+        run: |
+          git config --local user.email "action@github.com"
+          git config --local user.name "GitHub Action"
+          
+          git add homebrew/hubsync.rb
+          git commit -m "chore: update Homebrew formula for v${{ steps.version.outputs.version }}"
+          git push origin HEAD:main

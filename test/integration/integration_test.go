@@ -16,7 +16,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"github.com/yugasun/hubsync/internal/config"
-	"github.com/yugasun/hubsync/pkg/client"
+	"github.com/yugasun/hubsync/pkg/docker"
+	"github.com/yugasun/hubsync/pkg/registry"
 	"github.com/yugasun/hubsync/pkg/sync"
 )
 
@@ -54,16 +55,36 @@ func TestIntegration(t *testing.T) {
 			MaxContent:  10,
 			OutputPath:  outputPath,
 			Concurrency: 1,
+			LogLevel:    "info",
 			Timeout:     5 * time.Minute,
 		}
 
 		// Create Docker client
-		dockerClient, err := client.NewDockerClient(username, password, "")
+		dockerConfig := docker.ClientConfig{
+			Username:    username,
+			Password:    password,
+			Repository:  "",
+			RetryCount:  3,
+			RetryDelay:  5 * time.Second,
+			PullTimeout: 5 * time.Minute,
+			PushTimeout: 5 * time.Minute,
+		}
+
+		dockerClient, err := docker.NewClient(dockerConfig)
 		require.NoError(t, err, "Failed to create Docker client")
 		defer dockerClient.Close()
 
+		// Create registry client
+		registryConfig := registry.RegistryConfig{
+			Provider: registry.DockerHub,
+			Username: username,
+			Password: password,
+		}
+
+		registryClient := registry.NewDockerHubRegistry(registryConfig)
+
 		// Create syncer
-		syncer := sync.NewSyncer(cfg, dockerClient)
+		syncer := sync.NewSyncerV2(cfg, dockerClient, registryClient)
 
 		// Run sync process
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -98,16 +119,36 @@ func TestIntegration(t *testing.T) {
 			MaxContent:  10,
 			OutputPath:  outputPath,
 			Concurrency: 1,
+			LogLevel:    "info",
 			Timeout:     5 * time.Minute,
 		}
 
 		// Create Docker client
-		dockerClient, err := client.NewDockerClient(username, password, "")
+		dockerConfig := docker.ClientConfig{
+			Username:    username,
+			Password:    password,
+			Repository:  "",
+			RetryCount:  3,
+			RetryDelay:  5 * time.Second,
+			PullTimeout: 5 * time.Minute,
+			PushTimeout: 5 * time.Minute,
+		}
+
+		dockerClient, err := docker.NewClient(dockerConfig)
 		require.NoError(t, err, "Failed to create Docker client")
 		defer dockerClient.Close()
 
+		// Create registry client
+		registryConfig := registry.RegistryConfig{
+			Provider: registry.DockerHub,
+			Username: username,
+			Password: password,
+		}
+
+		registryClient := registry.NewDockerHubRegistry(registryConfig)
+
 		// Create syncer
-		syncer := sync.NewSyncer(cfg, dockerClient)
+		syncer := sync.NewSyncerV2(cfg, dockerClient, registryClient)
 
 		// Run sync process
 		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
@@ -145,16 +186,36 @@ func TestIntegration(t *testing.T) {
 			MaxContent:  10,
 			OutputPath:  outputPath,
 			Concurrency: 2, // Use concurrency for multiple images
+			LogLevel:    "info",
 			Timeout:     5 * time.Minute,
 		}
 
 		// Create Docker client
-		dockerClient, err := client.NewDockerClient(username, password, "")
+		dockerConfig := docker.ClientConfig{
+			Username:    username,
+			Password:    password,
+			Repository:  "",
+			RetryCount:  3,
+			RetryDelay:  5 * time.Second,
+			PullTimeout: 5 * time.Minute,
+			PushTimeout: 5 * time.Minute,
+		}
+
+		dockerClient, err := docker.NewClient(dockerConfig)
 		require.NoError(t, err, "Failed to create Docker client")
 		defer dockerClient.Close()
 
+		// Create registry client
+		registryConfig := registry.RegistryConfig{
+			Provider: registry.DockerHub,
+			Username: username,
+			Password: password,
+		}
+
+		registryClient := registry.NewDockerHubRegistry(registryConfig)
+
 		// Create syncer
-		syncer := sync.NewSyncer(cfg, dockerClient)
+		syncer := sync.NewSyncerV2(cfg, dockerClient, registryClient)
 
 		// Run sync process
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)

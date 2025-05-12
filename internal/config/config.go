@@ -1,6 +1,8 @@
 package config
 
 import (
+	"bytes"
+	"encoding/json"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -9,6 +11,9 @@ import (
 	"github.com/joho/godotenv"
 	"github.com/rs/zerolog/log"
 	"github.com/spf13/pflag"
+	"github.com/spf13/viper"
+
+	"github.com/yugasun/hubsync/pkg/errors"
 )
 
 // Config represents the application configuration
@@ -29,36 +34,88 @@ type Config struct {
 	RetryDelay  time.Duration
 
 	// Advanced settings
-	LogLevel    string
-	LogFile     string
-	ShowVersion bool
+	LogLevel       string
+	LogFile        string
+	ShowVersion    bool
+	Force          bool
+	DryRun         bool
+	Profile        string
+	ConfigFilePath string
+	Version        string
+
+	// Telemetry settings
+	TelemetryEnabled bool
+	MetricsEnabled   bool
 }
 
-// ParseConfig parses command-line flags and environment variables
+// ConfigProfile represents a named set of configuration options
+type ConfigProfile struct {
+	Name        string
+	Description string
+	Settings    map[string]interface{}
+}
+
+// DefaultConfig returns a config with sensible defaults
+func DefaultConfig() *Config {
+	return &Config{
+		Namespace:        "yugasun",
+		MaxContent:       10,
+		OutputPath:       "output.log",
+		Concurrency:      3,
+		Timeout:          10 * time.Minute,
+		RetryCount:       3,
+		RetryDelay:       2 * time.Second,
+		LogLevel:         "info",
+		Force:            false,
+		DryRun:           false,
+		Profile:          "default",
+		TelemetryEnabled: true,
+		MetricsEnabled:   false,
+	}
+}
+
+// ParseConfig parses command-line flags, environment variables, and config files
 func ParseConfig() (*Config, error) {
+	// Start with default config
+	cfg := DefaultConfig()
+
 	// Load environment variables from .env file if present
 	loadEnvFile()
 
-	cfg := &Config{}
+	// Initialize viper for hierarchical configuration
+	v := viper.New()
+	v.SetConfigName("hubsync")
+	v.SetConfigType("yaml")
+	v.AddConfigPath(".")
+	v.AddConfigPath("$HOME/.hubsync")
+	v.AddConfigPath("/etc/hubsync")
 
 	// Define command-line flags with environment variable fallbacks
-	pflag.StringVar(&cfg.Username, "username", getEnv("DOCKER_USERNAME", ""), "Docker registry username")
-	pflag.StringVar(&cfg.Password, "password", getEnv("DOCKER_PASSWORD", ""), "Docker registry password")
-	pflag.StringVar(&cfg.Repository, "repository", getEnv("DOCKER_REPOSITORY", ""), "Target repository address")
-	pflag.StringVar(&cfg.Namespace, "namespace", getEnv("DOCKER_NAMESPACE", "yugasun"), "Target namespace")
-	pflag.StringVar(&cfg.Content, "content", getEnv("CONTENT", ""), "JSON content with images to sync")
-	pflag.IntVar(&cfg.MaxContent, "maxContent", getEnvInt("MAX_CONTENT", 10), "Maximum number of images to process")
-	pflag.StringVar(&cfg.OutputPath, "outputPath", getEnv("OUTPUT_PATH", "output.log"), "Output file path")
+	pflag.StringVar(&cfg.Username, "username", getEnv("DOCKER_USERNAME", cfg.Username), "Docker registry username")
+	pflag.StringVar(&cfg.Password, "password", getEnv("DOCKER_PASSWORD", cfg.Password), "Docker registry password")
+	pflag.StringVar(&cfg.Repository, "repository", getEnv("DOCKER_REPOSITORY", cfg.Repository), "Target repository address")
+	pflag.StringVar(&cfg.Namespace, "namespace", getEnv("DOCKER_NAMESPACE", cfg.Namespace), "Target namespace")
+	pflag.StringVar(&cfg.Content, "content", getEnv("CONTENT", cfg.Content), "JSON content with images to sync")
+	pflag.IntVar(&cfg.MaxContent, "max-content", getEnvInt("MAX_CONTENT", cfg.MaxContent), "Maximum number of images to process")
+	pflag.StringVar(&cfg.OutputPath, "output", getEnv("OUTPUT_PATH", cfg.OutputPath), "Output file path")
 
 	// Performance settings
-	pflag.IntVar(&cfg.Concurrency, "concurrency", getEnvInt("CONCURRENCY", 3), "Maximum concurrent operations")
-	pflag.DurationVar(&cfg.Timeout, "timeout", getEnvDuration("TIMEOUT", 10*time.Minute), "Operation timeout")
-	pflag.IntVar(&cfg.RetryCount, "retryCount", getEnvInt("RETRY_COUNT", 3), "Number of retries for failed operations")
-	pflag.DurationVar(&cfg.RetryDelay, "retryDelay", getEnvDuration("RETRY_DELAY", 2*time.Second), "Delay between retries")
+	pflag.IntVar(&cfg.Concurrency, "concurrency", getEnvInt("CONCURRENCY", cfg.Concurrency), "Maximum concurrent operations")
+	pflag.DurationVar(&cfg.Timeout, "timeout", getEnvDuration("TIMEOUT", cfg.Timeout), "Operation timeout")
+	pflag.IntVar(&cfg.RetryCount, "retry-count", getEnvInt("RETRY_COUNT", cfg.RetryCount), "Number of retries for failed operations")
+	pflag.DurationVar(&cfg.RetryDelay, "retry-delay", getEnvDuration("RETRY_DELAY", cfg.RetryDelay), "Delay between retries")
 
 	// Advanced settings
-	pflag.StringVar(&cfg.LogLevel, "logLevel", getEnv("LOG_LEVEL", "info"), "Log level (debug, info, warn, error)")
-	pflag.StringVar(&cfg.LogFile, "logFile", getEnv("LOG_FILE", ""), "Log to file in addition to stdout")
+	pflag.StringVar(&cfg.LogLevel, "log-level", getEnv("LOG_LEVEL", cfg.LogLevel), "Log level (debug, info, warn, error)")
+	pflag.StringVar(&cfg.LogFile, "log-file", getEnv("LOG_FILE", cfg.LogFile), "Log to file in addition to stdout")
+	pflag.BoolVar(&cfg.Force, "force", getBoolEnv("FORCE", cfg.Force), "Force synchronization even if target exists")
+	pflag.BoolVar(&cfg.DryRun, "dry-run", getBoolEnv("DRY_RUN", cfg.DryRun), "Show what would be done without actually performing operations")
+	pflag.StringVar(&cfg.Profile, "profile", getEnv("PROFILE", cfg.Profile), "Configuration profile to use")
+	pflag.StringVar(&cfg.ConfigFilePath, "config", getEnv("CONFIG_FILE", ""), "Path to configuration file")
+
+	// Telemetry settings
+	pflag.BoolVar(&cfg.TelemetryEnabled, "telemetry", getBoolEnv("TELEMETRY_ENABLED", cfg.TelemetryEnabled), "Enable telemetry collection")
+	pflag.BoolVar(&cfg.MetricsEnabled, "metrics", getBoolEnv("METRICS_ENABLED", cfg.MetricsEnabled), "Enable metrics collection")
 
 	// Help and version
 	help := pflag.BoolP("help", "h", false, "Show this help message")
@@ -66,6 +123,11 @@ func ParseConfig() (*Config, error) {
 
 	// Parse flags
 	pflag.Parse()
+
+	// Bind pflags to viper
+	if err := v.BindPFlags(pflag.CommandLine); err != nil {
+		return nil, errors.NewConfigError("config", "failed to bind flags to viper", err)
+	}
 
 	// Show help if requested
 	if *help {
@@ -76,17 +138,52 @@ func ParseConfig() (*Config, error) {
 	// Store version flag
 	cfg.ShowVersion = *version
 
-	// Basic validation
-	if cfg.Username == "" && !cfg.ShowVersion {
-		return nil, fmt.Errorf("username is required")
+	// Try to load configuration file
+	if cfg.ConfigFilePath != "" {
+		v.SetConfigFile(cfg.ConfigFilePath)
 	}
 
-	if cfg.Password == "" && !cfg.ShowVersion {
-		return nil, fmt.Errorf("password is required")
+	// Read in config file if it exists
+	if err := v.ReadInConfig(); err != nil {
+		if _, ok := err.(viper.ConfigFileNotFoundError); !ok {
+			return nil, errors.NewConfigError("config", "error reading config file", err)
+		}
+		// Config file not found is normal, continue with other sources
+		log.Debug().Msg("No configuration file found, using command-line and environment values")
+	} else {
+		log.Debug().Str("file", v.ConfigFileUsed()).Msg("Configuration loaded from file")
+
+		// Apply profile if specified and found
+		if cfg.Profile != "default" && v.IsSet("profiles") {
+			profiles := v.GetStringMap("profiles")
+			if profileSettings, ok := profiles[cfg.Profile]; ok {
+				// Convert map to JSON and back to apply profile settings
+				jsonBytes, err := json.Marshal(profileSettings)
+				if err != nil {
+					return nil, errors.NewConfigError("config", "error marshaling profile settings", err)
+				}
+
+				if err := json.Unmarshal(jsonBytes, cfg); err != nil {
+					return nil, errors.NewConfigError("config", "error applying profile settings", err)
+				}
+
+				log.Debug().Str("profile", cfg.Profile).Msg("Applied configuration profile")
+			} else {
+				log.Warn().Str("profile", cfg.Profile).Msg("Requested profile not found in configuration")
+			}
+		}
+
+		// Map all remaining config settings from viper to struct
+		if err := v.Unmarshal(cfg); err != nil {
+			return nil, errors.NewConfigError("config", "error unmarshaling config", err)
+		}
 	}
 
-	if cfg.Content == "" && !cfg.ShowVersion {
-		return nil, fmt.Errorf("content is required")
+	// Validate required fields based on mode
+	if !cfg.ShowVersion {
+		if err := cfg.Validate(); err != nil {
+			return nil, err
+		}
 	}
 
 	// Log the configuration (omitting sensitive fields)
@@ -98,6 +195,12 @@ func ParseConfig() (*Config, error) {
 		Int("concurrency", cfg.Concurrency).
 		Dur("timeout", cfg.Timeout).
 		Str("outputPath", cfg.OutputPath).
+		Bool("force", cfg.Force).
+		Bool("dryRun", cfg.DryRun).
+		Str("profile", cfg.Profile).
+		Str("logLevel", cfg.LogLevel).
+		Bool("telemetryEnabled", cfg.TelemetryEnabled).
+		Bool("metricsEnabled", cfg.MetricsEnabled).
 		Msg("Configuration loaded")
 
 	return cfg, nil
@@ -106,20 +209,138 @@ func ParseConfig() (*Config, error) {
 // Validate validates the configuration
 func (c *Config) Validate() error {
 	if c.Username == "" {
-		return fmt.Errorf("username is required")
+		return errors.NewValidationError("config", "username is required", nil)
 	}
 	if c.Password == "" {
-		return fmt.Errorf("password is required")
+		return errors.NewValidationError("config", "password is required", nil)
 	}
 	if c.Content == "" {
-		return fmt.Errorf("content is required")
+		return errors.NewValidationError("config", "content is required", nil)
 	}
+
+	// Validate log level
+	validLogLevels := map[string]bool{
+		"debug": true,
+		"info":  true,
+		"warn":  true,
+		"error": true,
+		"fatal": true,
+	}
+
+	if _, valid := validLogLevels[c.LogLevel]; !valid {
+		return errors.NewValidationError(
+			"config",
+			fmt.Sprintf("invalid log level: %s (must be one of: debug, info, warn, error, fatal)", c.LogLevel),
+			nil,
+		)
+	}
+
+	// Validate performance settings
+	if c.Concurrency < 1 {
+		return errors.NewValidationError(
+			"config",
+			fmt.Sprintf("invalid concurrency: %d (must be >= 1)", c.Concurrency),
+			nil,
+		)
+	}
+
+	if c.RetryCount < 0 {
+		return errors.NewValidationError(
+			"config",
+			fmt.Sprintf("invalid retry count: %d (must be >= 0)", c.RetryCount),
+			nil,
+		)
+	}
+
 	return nil
+}
+
+// LoadFromFile loads configuration from a file
+func (c *Config) LoadFromFile(filePath string) error {
+	data, err := os.ReadFile(filePath)
+	if err != nil {
+		return errors.NewIOError("config", "failed to read configuration file", err)
+	}
+
+	// Check file extension
+	ext := filepath.Ext(filePath)
+	switch ext {
+	case ".json":
+		if err := json.Unmarshal(data, c); err != nil {
+			return errors.NewConfigError("config", "failed to parse JSON configuration", err)
+		}
+	case ".yml", ".yaml":
+		v := viper.New()
+		v.SetConfigType("yaml")
+		if err := v.ReadConfig(bytes.NewReader(data)); err != nil {
+			return errors.NewConfigError("config", "failed to parse YAML configuration", err)
+		}
+		if err := v.Unmarshal(c); err != nil {
+			return errors.NewConfigError("config", "failed to apply YAML configuration", err)
+		}
+	default:
+		return errors.NewConfigError("config", fmt.Sprintf("unsupported config file format: %s", ext), nil)
+	}
+
+	return nil
+}
+
+// SaveToFile saves configuration to a file
+func (c *Config) SaveToFile(filePath string) error {
+	// Check file extension
+	ext := filepath.Ext(filePath)
+	var data []byte
+	var err error
+
+	switch ext {
+	case ".json":
+		data, err = json.MarshalIndent(c, "", "  ")
+		if err != nil {
+			return errors.NewOperationError("config", "failed to marshal configuration to JSON", err)
+		}
+	case ".yml", ".yaml":
+		v := viper.New()
+		for key, value := range structToMap(c) {
+			v.Set(key, value)
+		}
+		v.SetConfigType("yaml")
+
+		// Create a temporary file for viper to write to
+		tmpFile := filePath + ".tmp"
+		if err := v.WriteConfigAs(tmpFile); err != nil {
+			return errors.NewOperationError("config", "failed to write YAML configuration", err)
+		}
+
+		// Read the file back
+		data, err = os.ReadFile(tmpFile)
+		if err != nil {
+			return errors.NewOperationError("config", "failed to read temporary YAML configuration", err)
+		}
+
+		// Clean up
+		os.Remove(tmpFile)
+	default:
+		return errors.NewConfigError("config", fmt.Sprintf("unsupported config file format: %s", ext), nil)
+	}
+
+	return os.WriteFile(filePath, data, 0o644)
+}
+
+// Helper to convert struct to map
+func structToMap(obj interface{}) map[string]interface{} {
+	// Convert to JSON
+	jsonData, _ := json.Marshal(obj)
+
+	// Convert JSON to map
+	var result map[string]interface{}
+	json.Unmarshal(jsonData, &result)
+
+	return result
 }
 
 // Helper functions to get values from environment variables
 // GetEnv gets an environment variable or returns a default value
-func GetEnv(key, fallback string) string {
+func GetEnv(key string, fallback string) string {
 	if value, exists := os.LookupEnv(key); exists {
 		return value
 	}
@@ -147,6 +368,19 @@ func GetEnvDuration(key string, fallback time.Duration) time.Duration {
 	return fallback
 }
 
+// GetBoolEnv gets a boolean environment variable or returns a default value
+func GetBoolEnv(key string, fallback bool) bool {
+	if value, exists := os.LookupEnv(key); exists {
+		if value == "true" || value == "1" || value == "yes" {
+			return true
+		}
+		if value == "false" || value == "0" || value == "no" {
+			return false
+		}
+	}
+	return fallback
+}
+
 // Unexported versions for internal use
 func getEnv(key, fallback string) string {
 	return GetEnv(key, fallback)
@@ -160,6 +394,10 @@ func getEnvDuration(key string, fallback time.Duration) time.Duration {
 	return GetEnvDuration(key, fallback)
 }
 
+func getBoolEnv(key string, fallback bool) bool {
+	return GetBoolEnv(key, fallback)
+}
+
 // loadEnvFile attempts to load environment variables from .env file in the current directory
 func loadEnvFile() {
 	// Try to get the current working directory
@@ -171,9 +409,10 @@ func loadEnvFile() {
 
 	// Define possible .env file locations
 	envFiles := []string{
-		filepath.Join(cwd, ".env"),          // .env in current directory
-		filepath.Join(cwd, "..", ".env"),    // .env in parent directory (for subcommands)
-		filepath.Join(cwd, "../..", ".env"), // .env two levels up (for deeper nesting)
+		filepath.Join(cwd, ".env"),                           // .env in current directory
+		filepath.Join(cwd, "..", ".env"),                     // .env in parent directory (for subcommands)
+		filepath.Join(cwd, "../..", ".env"),                  // .env two levels up (for deeper nesting)
+		filepath.Join(os.Getenv("HOME"), ".hubsync", ".env"), // .env in user's home config directory
 	}
 
 	// Try loading from each location
@@ -190,7 +429,7 @@ func loadEnvFile() {
 		}
 	}
 
-	log.Debug().Msg("No .env file found in current directory or parent directories")
+	log.Debug().Msg("No .env file found in standard locations")
 }
 
 // LoadEnvFileForTesting exports the loadEnvFile function for testing purposes

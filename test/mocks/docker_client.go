@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/yugasun/hubsync/pkg/client"
+	"github.com/yugasun/hubsync/pkg/docker"
 )
 
 // MockDockerClient provides a mock implementation for testing Docker client operations
@@ -20,8 +20,8 @@ type MockDockerClient struct {
 	CredentialError error
 }
 
-// Ensure MockDockerClient implements DockerClientInterface
-var _ client.DockerClientInterface = (*MockDockerClient)(nil)
+// Ensure MockDockerClient implements docker.ClientInterface
+var _ docker.ClientInterface = (*MockDockerClient)(nil)
 
 // NewMockDockerClient creates a new instance of MockDockerClient
 func NewMockDockerClient() *MockDockerClient {
@@ -101,6 +101,37 @@ func (m *MockDockerClient) PushImage(ctx context.Context, imageName string) erro
 // VerifyCredentials mocks Docker registry authentication
 func (m *MockDockerClient) VerifyCredentials(ctx context.Context) error {
 	return m.CredentialError
+}
+
+// GetImageInfo implements the new method required by docker.ClientInterface
+func (m *MockDockerClient) GetImageInfo(ctx context.Context, imageName string) (*docker.ImageReference, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	// Parse the image name to extract parts
+	// For mock purposes, we'll just return a simple ImageReference
+	var tag string
+	name := imageName
+
+	// Extract tag if present
+	for i := len(imageName) - 1; i >= 0; i-- {
+		if imageName[i] == ':' {
+			name = imageName[:i]
+			tag = imageName[i+1:]
+			break
+		}
+	}
+
+	// If no tag was found, use "latest"
+	if tag == "" {
+		tag = "latest"
+	}
+
+	return &docker.ImageReference{
+		FullName: imageName,
+		Name:     name,
+		Tag:      tag,
+	}, nil
 }
 
 // Close mocks the closing of resources

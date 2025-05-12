@@ -55,6 +55,68 @@ type outputItem struct {
 	Repository string
 }
 
+// generateTargetName 生成目标镜像名称
+// 参数：
+// - source: 源镜像名称，可能包含 "$" 作为自定义命名分隔符
+// - repositoryURL: 目标仓库URL，如果为空则使用默认仓库
+// - namespace: 命名空间
+// 返回：
+// - 处理后的源镜像名称（确保有标签）
+// - 目标镜像名称
+func generateTargetName(source string, repositoryURL, namespace string) (string, string) {
+	// 保存原始输入以备后用
+	originalSource := source
+
+	// 检查是否有自定义模式（包含 $ 符号）
+	hasCustomPattern := strings.Contains(source, "$")
+
+	// 处理自定义模式
+	if hasCustomPattern {
+		parts := strings.Split(source, "$")
+		source = parts[0]
+		// 注：customName 在当前实现中未直接使用，但保留在注释中以便理解设计
+		// customName := parts[1] if len(parts) > 1
+	}
+
+	// 确保源镜像有标签，如果没有则添加 "latest"
+	if !strings.Contains(source, ":") {
+		source = source + ":latest"
+	}
+
+	// 构建目标镜像名称
+	var target string
+
+	// 判断是否带有版本标签
+	isTaggedWithVersion := strings.Contains(originalSource, ":v") && hasCustomPattern
+
+	// 根据不同情况构建目标镜像名称
+	if repositoryURL == "" {
+		// 没有指定仓库地址
+		if hasCustomPattern && isTaggedWithVersion {
+			// 特殊情况：自定义模式且带版本标签，直接使用源镜像
+			target = source
+		} else if hasCustomPattern {
+			// 其他自定义模式，替换路径分隔符为点
+			imageName := strings.ReplaceAll(source, "/", ".")
+			target = namespace + "/" + imageName
+		} else {
+			// 标准模式，直接添加命名空间前缀
+			target = namespace + "/" + source
+		}
+	} else {
+		// 指定了仓库地址
+		// 提取镜像名称（不包含路径）
+		imageName := source
+		if strings.Contains(source, "/") {
+			parts := strings.Split(source, "/")
+			imageName = parts[len(parts)-1]
+		}
+		target = repositoryURL + "/" + namespace + "/" + imageName
+	}
+
+	return source, target
+}
+
 func printErrorAndExit(err error, msg string) {
 	fmt.Fprintf(os.Stderr, "%s: %v\n", msg, err)
 	os.Exit(1)
@@ -167,17 +229,9 @@ func main() {
 		}
 		source := src
 		target := source
-		if strings.Contains(source, "$") {
-			str1 := strings.Split(source, "$")
-			repositoryParts := strings.Split(str1[0], ":")
-			target = str1[1] + ":" + repositoryParts[len(repositoryParts)-1]
-			source = str1[0]
-		}
-		if *repository == "" {
-			target = *namespace + "/" + strings.ReplaceAll(target, "/", ".")
-		} else {
-			target = *repository + "/" + *namespace + "/" + strings.ReplaceAll(target, "/", ".")
-		}
+
+		source, target = generateTargetName(source, *repository, *namespace)
+
 		wg.Add(1)
 		go func(source, target, repository string) {
 			defer wg.Done()

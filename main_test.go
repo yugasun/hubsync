@@ -40,3 +40,75 @@ func TestTargetNameGeneration(t *testing.T) {
 	target = repository + "/" + namespace + "/" + source
 	assert.Equal(t, "docker.io/testns/nginx:latest", target)
 }
+
+func TestGenerateTargetName(t *testing.T) {
+	testCases := []struct {
+		name           string
+		source         string
+		repositoryURL  string
+		namespace      string
+		expectedSource string
+		expectedTarget string
+	}{
+		{
+			name:           "Standard input without $ and with tag",
+			source:         "nginx:1.19",
+			repositoryURL:  "",
+			namespace:      "yugasun",
+			expectedSource: "nginx:1.19",
+			expectedTarget: "yugasun/nginx:1.19",
+		},
+		{
+			name:           "Standard input without $ and without tag",
+			source:         "nginx",
+			repositoryURL:  "",
+			namespace:      "yugasun",
+			expectedSource: "nginx:latest",
+			expectedTarget: "yugasun/nginx:latest",
+		},
+		{
+			name:           "Custom input with $ symbol",
+			source:         "yugasun/alpine$alpine",
+			repositoryURL:  "",
+			namespace:      "yugasun",
+			expectedSource: "yugasun/alpine:latest",
+			expectedTarget: "yugasun/yugasun.alpine:latest",
+		},
+		{
+			name:           "Custom input with $ symbol and tag",
+			source:         "yugasun/alpine:v1$alpine",
+			repositoryURL:  "",
+			namespace:      "yugasun",
+			expectedSource: "yugasun/alpine:v1",
+			expectedTarget: "yugasun/alpine:v1",
+		},
+		{
+			name:           "With repository address",
+			source:         "nginx:1.19",
+			repositoryURL:  "registry.cn-beijing.aliyuncs.com",
+			namespace:      "yugasun",
+			expectedSource: "nginx:1.19",
+			expectedTarget: "registry.cn-beijing.aliyuncs.com/yugasun/nginx:1.19",
+		},
+		{
+			name:           "With repository address and $ symbol",
+			source:         "yugasun/alpine$alpine",
+			repositoryURL:  "registry.cn-beijing.aliyuncs.com",
+			namespace:      "yugasun",
+			expectedSource: "yugasun/alpine:latest",
+			expectedTarget: "registry.cn-beijing.aliyuncs.com/yugasun/alpine:latest",
+		},
+	}
+
+	for _, tc := range testCases {
+		t.Run(tc.name, func(t *testing.T) {
+			gotSource, gotTarget := generateTargetName(tc.source, tc.repositoryURL, tc.namespace)
+			if gotSource != tc.expectedSource {
+				t.Errorf("generateTargetName() source image error = %v, expected %v", gotSource, tc.expectedSource)
+			}
+			if gotTarget != tc.expectedTarget {
+				t.Errorf("generateTargetName() target image error = %v, expected %v", gotTarget, tc.expectedTarget)
+			}
+		})
+	}
+}

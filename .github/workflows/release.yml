@@ -6,7 +6,34 @@ on:
       - 'v*'
 
 jobs:
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Golang
+        uses: actions/setup-go@v5
+        with:
+          go-version: 1.23
+      
+      - name: Setup Golang caches
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/go-build
+            ~/go/pkg/mod
+          key: ${{ runner.os }}-golang-${{ hashFiles('**/go.sum') }}
+          restore-keys: |
+            ${{ runner.os }}-golang-
+      
+      - name: Run unit tests
+        run: make unit-test
+  
   build:
+    needs: test
+    name: Build Binaries
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -18,10 +45,12 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+      
       - name: Setup Golang
         uses: actions/setup-go@v5
         with:
-          go-version: 1.21
+          go-version: 1.23
+      
       - name: Setup Golang caches
         uses: actions/cache@v4
         with:
@@ -31,27 +60,62 @@ jobs:
           key: ${{ runner.os }}-golang-${{ hashFiles('**/go.sum') }}
           restore-keys: |
             ${{ runner.os }}-golang-
+      
       - name: Build
         run: |
           mkdir -p dist
-          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -o dist/hubsync-${{ matrix.goos }}-${{ matrix.goarch }}
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build -ldflags="-s -w -X main.version=${GITHUB_REF#refs/tags/}" -o dist/hubsync-${{ matrix.goos }}-${{ matrix.goarch }} ./cmd/hubsync
+          
+          # Add file extension for Windows
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            mv dist/hubsync-${{ matrix.goos }}-${{ matrix.goarch }} dist/hubsync-${{ matrix.goos }}-${{ matrix.goarch }}.exe
+          fi
+          
+          # Create checksum
+          cd dist
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            sha256sum hubsync-${{ matrix.goos }}-${{ matrix.goarch }}.exe > hubsync-${{ matrix.goos }}-${{ matrix.goarch }}.exe.sha256
+          else
+            sha256sum hubsync-${{ matrix.goos }}-${{ matrix.goarch }} > hubsync-${{ matrix.goos }}-${{ matrix.goarch }}.sha256
+          fi
+      
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: hubsync-${{ matrix.goos }}-${{ matrix.goarch }}
-          path: dist/hubsync-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: |
+            dist/hubsync-${{ matrix.goos }}-${{ matrix.goarch }}*
 
   release:
     needs: build
+    name: Create GitHub Release
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           path: dist
+      
+      - name: Generate release notes
+        run: |
+          echo "## HubSync Release ${GITHUB_REF#refs/tags/}" > release_notes.md
+          echo "" >> release_notes.md
+          echo "### Changes" >> release_notes.md
+          git log $(git describe --tags --abbrev=0 HEAD^)..HEAD --pretty=format:"- %s" --no-merges >> release_notes.md
+          echo "" >> release_notes.md
+          echo "### Installation" >> release_notes.md
+          echo '```bash' >> release_notes.md
+          echo 'curl -fsSL https://raw.githubusercontent.com/yugasun/hubsync/main/install.sh | bash' >> release_notes.md
+          echo '```' >> release_notes.md
+      
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:
+          body_path: release_notes.md
           files: dist/**/hubsync-*
+          draft: false
         env:
           GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}

@@ -9,7 +9,7 @@ import (
 )
 
 // Version is set during build via -ldflags
-var Version = "dev"
+var Version = "0.1.0"
 
 func main() {
 	// Initialize the logger

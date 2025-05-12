@@ -205,7 +205,7 @@ func (s *Syncer) ProcessImageWithRetry(ctx context.Context, source string) (stri
 		}
 
 		// Process the image
-		source, target, lastErr = s.processImage(ctx, source)
+		source, target, lastErr = s.ProcessImage(ctx, source)
 		if lastErr == nil {
 			// Success, no more retries needed
 			return source, target, nil
@@ -241,7 +241,7 @@ func (s *Syncer) ProcessImageWithRetry(ctx context.Context, source string) (stri
 }
 
 // processImage handles the core image processing logic
-func (s *Syncer) processImage(ctx context.Context, source string) (string, string, error) {
+func (s *Syncer) ProcessImage(ctx context.Context, source string) (string, string, error) {
 	startTime := time.Now()
 
 	// Generate source and target names

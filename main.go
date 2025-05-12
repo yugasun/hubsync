@@ -193,7 +193,7 @@ func main() {
 	// Only print login command once if repository is set
 	var loginCmd string
 	if output[0].Repository != "" {
-		loginCmd = fmt.Sprintf("# If your repository is private, please login first...\n# docker login %s --username={your username}\n", output[0].Repository)
+		loginCmd = fmt.Sprintf("# If your repository is private, please login first...\n# docker login %s --username={your username}\n\n", output[0].Repository)
 	}
 	tmpl, err := template.New("pull_images").Parse(loginCmd + `{{- range . -}}
 docker pull {{ .Target }}

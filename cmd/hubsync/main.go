@@ -10,12 +10,18 @@ import (
 	"github.com/yugasun/hubsync/internal/utils"
 )
 
-// Version is set during build via -ldflags
-var Version = "0.1.0"
+// Version information is set during build via -ldflags
+var (
+	Version = "dev"
+)
 
 func main() {
 	// Initialize the logger (will be properly configured once config is loaded)
 	utils.InitLogger("info", "")
+
+	log.Info().
+		Str("version", Version).
+		Msg("Starting hubsync")
 
 	// Run the application with improved dependency management
 	if err := app.Run(Version); err != nil {

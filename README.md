@@ -29,6 +29,7 @@ curl -fsSL https://raw.githubusercontent.com/yugasun/hubsync/refs/heads/main/qui
 ```
 
 This script will:
+
 - Install HubSync if not already installed
 - Guide you through setting up Docker credentials
 - Help you run your first sync job
@@ -48,8 +49,8 @@ curl -fsSL https://raw.githubusercontent.com/yugasun/hubsync/refs/heads/main/ins
 **Method B: Homebrew (macOS)**
 
 ```sh
-brew tap yugasun/hubsync
-brew install hubsync
+brew tap yugasun/tap
+brew install yugasun/tap/hubsync
 ```
 
 **Method C: Docker**

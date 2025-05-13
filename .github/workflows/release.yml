@@ -17,6 +17,11 @@ on:
           - patch
           - minor
           - major
+      force_build:
+        description: 'Force build even if no version change'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   group: release-${{ github.ref }}
@@ -32,41 +37,66 @@ jobs:
       release_type: ${{ github.event.inputs.release_type || '' }}
     secrets: inherit
 
-  # Build binaries if new version was created or if this is a tag push
+  # Check if build is needed
+  check-build-needed:
+    name: Check if Build is Needed
+    needs: [version]
+    runs-on: ubuntu-latest
+    outputs:
+      build_needed: ${{ steps.check.outputs.build_needed }}
+    steps:
+      - name: Determine if build is needed
+        id: check
+        run: |
+          # Build is needed if:
+          # 1. New release was created
+          # 2. This is a tag push (manual release)
+          # 3. Forced build via workflow_dispatch
+          if [[ "${{ needs.version.outputs.is_new_release }}" == "true" || 
+                "${{ github.event_name }}" == "push" && "${{ startsWith(github.ref, 'refs/tags/v') }}" == "true" ||
+                "${{ github.event.inputs.force_build }}" == "true" ]]; then
+            echo "build_needed=true" >> $GITHUB_OUTPUT
+            echo "Build is needed. Proceeding with build process."
+          else
+            echo "build_needed=false" >> $GITHUB_OUTPUT
+            echo "No new version detected and build not forced. Skipping build process."
+          fi
+
+  # Build binaries only if needed
   build:
     name: Build Binaries
-    needs: [version]
-    if: needs.version.outputs.is_new_release == 'true' || github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [version, check-build-needed]
+    if: needs.check-build-needed.outputs.build_needed == 'true'
     uses: ./.github/workflows/build.yml
     with:
       version: ${{ needs.version.outputs.version || github.ref }}
     secrets: inherit
 
-  # Publish release after building
+  # Publish release after building (only if build was performed)
   publish:
     name: Publish Release
-    needs: [version, build]
-    if: needs.build.outputs.artifacts_created == 'true' || github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [version, check-build-needed, build]
+    if: needs.check-build-needed.outputs.build_needed == 'true' && needs.build.outputs.artifacts_created == 'true'
     uses: ./.github/workflows/publish.yml
     with:
       version: ${{ needs.version.outputs.version || github.ref }}
     secrets: inherit
 
-  # Update install script with latest version
+  # Update install script with latest version (only for new releases)
   update-install:
     name: Update Install Script
-    needs: [version, publish]
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.version.outputs.is_new_release == 'true' || github.event_name == 'workflow_dispatch' && needs.version.outputs.is_new_release == 'true'
+    needs: [version, check-build-needed, publish]
+    if: needs.check-build-needed.outputs.build_needed == 'true'
     uses: ./.github/workflows/update-install.yml
     with:
       version: ${{ needs.version.outputs.version }}
     secrets: inherit
 
-  # Trigger Docker workflow after a successful release  
+  # Trigger Docker workflow after a successful release (only if build was performed)  
   trigger-docker:
     name: Trigger Docker Build
-    needs: [version, publish]
-    if: needs.version.outputs.is_new_release == 'true' || github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+    needs: [version, check-build-needed, publish]
+    if: needs.check-build-needed.outputs.build_needed == 'true'
     runs-on: ubuntu-latest
     steps:
       - name: Trigger Docker workflow
@@ -87,26 +117,26 @@ jobs:
               }
             });
 
-  # Trigger Homebrew workflow after a successful release
-  trigger-homebrew:
-    name: Trigger Homebrew Update
-    needs: [version, publish]
-    if: needs.version.outputs.is_new_release == 'true' || github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')
+  # Trigger Homebrew tap update workflow after a successful release
+  trigger-homebrew-tap:
+    name: Trigger Homebrew Tap Update
+    needs: [version, check-build-needed, publish]
+    if: needs.check-build-needed.outputs.build_needed == 'true'
     runs-on: ubuntu-latest
     steps:
-      - name: Trigger Homebrew workflow
+      - name: Trigger Homebrew tap workflow
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GH_TOKEN }}
           script: |
             const version = '${{ needs.version.outputs.version || github.ref }}'.replace('refs/tags/', '');
             const versionWithoutV = version.replace(/^v/, '');
-            console.log(`Triggering Homebrew update for version: ${versionWithoutV}`);
+            console.log(`Triggering Homebrew tap update for version: ${versionWithoutV}`);
             
             await github.rest.actions.createWorkflowDispatch({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'homebrew.yml',
+              workflow_id: 'update-tap.yml',
               ref: 'main',
               inputs: {
                 version: versionWithoutV

@@ -1,8 +1,50 @@
+# OS specific files
 .DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor directories and files
 .idea/
 .vscode/
+*.swp
+*.swo
+*~
+.history/
+
+# Environment and configuration
 .env
+*.env.local
+*.env.development.local
+*.env.test.local
+*.env.production.local
 
+# Go specific
+bin/
+vendor/
+/dist
+/coverage.txt
+/coverage.html
+
+# Compilation and build files
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Logs
 *.log
+logs/
 
+# Project specific output directories
 reports/
+temp/
+tmp/
+
+# Dependency directories
+node_modules/
+
+# Miscellaneous
+.tmp/
+.cache/

@@ -1,0 +1,103 @@
+name: Update Install Script
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version to update in install script'
+        required: true
+        type: string
+
+jobs:
+  update-script:
+    name: Update Install Script Version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: main
+          token: ${{ secrets.GH_TOKEN }}
+          
+      - name: Update install.sh with latest version and timestamp
+        run: |
+          VERSION="${{ inputs.version }}"
+          TODAY=$(date -u +"%Y-%m-%d")
+          echo "Updating install.sh to reference version: ${VERSION}"
+          echo "Updating timestamp to: ${TODAY}"
+          
+          # Add version information to the install script
+          if ! grep -q "LATEST_VERSION=" install.sh; then
+            # If LATEST_VERSION variable doesn't exist, add it
+            sed -i "/BINARY_NAME=\"hubsync\"/a LATEST_VERSION=\"${VERSION#v}\"" install.sh
+          else
+            # If it exists, update it
+            sed -i "s/LATEST_VERSION=.*/LATEST_VERSION=\"${VERSION#v}\"/" install.sh
+          fi
+          
+          # Update the LAST_UPDATED timestamp
+          if ! grep -q "LAST_UPDATED=" install.sh; then
+            # If LAST_UPDATED variable doesn't exist, add it
+            sed -i "/LATEST_VERSION=/a LAST_UPDATED=\"${TODAY}\"" install.sh
+          else
+            # If it exists, update it
+            sed -i "s/LAST_UPDATED=.*/LAST_UPDATED=\"${TODAY}\"/" install.sh
+          fi
+          
+          # Preview the changes
+          echo "Updated values in install.sh:"
+          grep -e "LATEST_VERSION=" -e "LAST_UPDATED=" install.sh
+          
+      - name: Check if script is executable
+        run: |
+          if [ ! -x install.sh ]; then
+            echo "Making install.sh executable"
+            chmod +x install.sh
+          fi
+      
+      - name: Verify install script functionality
+        run: |
+          echo "Performing basic validation of install.sh"
+          # Run with --help to validate basic functionality
+          ./install.sh --help || true
+          
+          # Check for common script errors
+          bash -n install.sh
+          
+          echo "Install script validation complete"
+          
+      - name: Commit and push changes
+        run: |
+          git config --global user.name "GitHub Action"
+          git config --global user.email "action@github.com"
+          
+          git add install.sh
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else 
+            git commit -m "chore(install): update install.sh with version ${VERSION#v} [skip ci]"
+            
+            # Push changes with retry logic
+            MAX_ATTEMPTS=3
+            ATTEMPT=1
+            
+            while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+              echo "Push attempt $ATTEMPT of $MAX_ATTEMPTS"
+              
+              if git push origin main; then
+                echo "Push successful"
+                break
+              else
+                echo "Push failed, retrying..."
+                git pull --rebase origin main
+                ATTEMPT=$((ATTEMPT + 1))
+                if [ $ATTEMPT -gt $MAX_ATTEMPTS ]; then
+                  echo "All push attempts failed"
+                  exit 1
+                fi
+                sleep 2
+              fi
+            done
+          fi

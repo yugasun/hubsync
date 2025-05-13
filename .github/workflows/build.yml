@@ -1,0 +1,94 @@
+name: Build Binaries
+
+on:
+  workflow_call:
+    inputs:
+      version:
+        description: 'Version to build'
+        required: true
+        type: string
+    outputs:
+      artifacts_created:
+        description: 'Whether artifacts were successfully created'
+        value: ${{ jobs.build.outputs.artifacts_created }}
+
+jobs:
+  build:
+    name: Build Binaries
+    runs-on: ubuntu-latest
+    outputs:
+      artifacts_created: ${{ steps.upload.outcome == 'success' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        goos: [linux, darwin, windows]
+        goarch: [amd64, arm64]
+        exclude:
+          - goos: windows
+            goarch: arm64
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+      
+      - name: Setup Golang
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      
+      - name: Build for ${{ matrix.goos }}-${{ matrix.goarch }}
+        run: |
+          VERSION="${{ inputs.version }}"
+          
+          mkdir -p dist
+          echo "Building version: $VERSION for ${{ matrix.goos }}-${{ matrix.goarch }}"
+          
+          # Build with version information and optimizations
+          GOOS=${{ matrix.goos }} GOARCH=${{ matrix.goarch }} go build \
+            -ldflags="-s -w -X main.version=${VERSION#v} -X main.buildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            -trimpath \
+            -o dist/hubsync-${{ matrix.goos }}-${{ matrix.goarch }} \
+            ./cmd/hubsync
+          
+          # Add file extension for Windows
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            mv dist/hubsync-${{ matrix.goos }}-${{ matrix.goarch }} dist/hubsync-${{ matrix.goos }}-${{ matrix.goarch }}.exe
+          fi
+          
+          # Create checksum
+          cd dist
+          if [ "${{ matrix.goos }}" = "windows" ]; then
+            sha256sum hubsync-${{ matrix.goos }}-${{ matrix.goarch }}.exe > hubsync-${{ matrix.goos }}-${{ matrix.goarch }}.exe.sha256
+          else
+            sha256sum hubsync-${{ matrix.goos }}-${{ matrix.goarch }} > hubsync-${{ matrix.goos }}-${{ matrix.goarch }}.sha256
+          fi
+      
+      - name: Upload artifact
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: hubsync-${{ matrix.goos }}-${{ matrix.goarch }}
+          path: dist/
+          retention-days: 7
+          compression-level: 9  # Maximum compression
+          
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.version }}
+      
+      - name: Setup Golang
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      
+      - name: Run tests
+        run: make test || make unit-test

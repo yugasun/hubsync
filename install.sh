@@ -7,6 +7,10 @@ set -e
 REPO="yugasun/hubsync"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="hubsync"
+# This value will be auto-updated by the release workflow
+LATEST_VERSION=""
+# This timestamp helps track when the script was last updated
+LAST_UPDATED="2023-05-13" 
 
 # Colors for terminal output
 RED='\033[0;31m'
@@ -117,15 +121,23 @@ detect_system() {
 download_release() {
     # Determine the latest version
     echo -e "${BLUE}Fetching latest release...${NC}"
-    LATEST=$(curl -s https://api.github.com/repos/$REPO/releases/latest | grep tag_name | cut -d '"' -f4)
-    if [ -z "$LATEST" ]; then
-        echo -e "${RED}Error: Failed to determine latest version. Check your internet connection.${NC}"
-        exit 1
+    
+    # Use hardcoded version if available (from auto-updated script)
+    if [ -n "$LATEST_VERSION" ]; then
+        LATEST="v$LATEST_VERSION"
+        echo -e "${GREEN}Using latest version from script: $LATEST${NC}"
+    else
+        # Otherwise fetch from GitHub API
+        LATEST=$(curl -s https://api.github.com/repos/$REPO/releases/latest | grep tag_name | cut -d '"' -f4)
+        if [ -z "$LATEST" ]; then
+            echo -e "${RED}Error: Failed to determine latest version. Check your internet connection.${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}Latest version from GitHub: $LATEST${NC}"
     fi
-    echo -e "${GREEN}Latest version: $LATEST${NC}"
 
     # Skip if already at latest version
-    if [[ "$CURRENT_VERSION" == "$LATEST" ]]; then
+    if [[ "$CURRENT_VERSION" == "$LATEST" || "$CURRENT_VERSION" == "${LATEST#v}" ]]; then
         echo -e "${GREEN}You already have the latest version installed!${NC}"
         if [ "$1" != "force" ]; then
             echo -e "${YELLOW}Use --force to reinstall anyway.${NC}"
@@ -137,6 +149,9 @@ download_release() {
 
     # Define download URL
     BINARY="hubsync-${OS}-${ARCH}"
+    if [[ "$OS" == "windows" ]]; then
+        BINARY="${BINARY}.exe"
+    fi
     URL="https://github.com/$REPO/releases/download/$LATEST/$BINARY"
 
     # Create temporary directory
@@ -145,21 +160,81 @@ download_release() {
     echo -e "${BLUE}Using temporary directory: $TMP${NC}"
     cd $TMP
 
-    # Download binary
-    echo -e "${BLUE}Downloading $BINARY...${NC}"
-    if ! curl -fsSLO --retry 3 "$URL" & pid=$!; then
-        show_spinner $pid "Downloading"
-        wait $pid
+    # Download binary with progress indicator
+    echo -e "${BLUE}Downloading $BINARY from $URL...${NC}"
+    download_with_progress() {
+        local url=$1
+        local output=$2
+        local max_retries=3
+        local retry=0
+        
+        while [ $retry -lt $max_retries ]; do
+            if curl -fSL --progress-bar "$url" -o "$output"; then
+                return 0
+            else
+                retry=$((retry + 1))
+                if [ $retry -lt $max_retries ]; then
+                    echo -e "${YELLOW}Download failed. Retrying ($retry/$max_retries)...${NC}"
+                    sleep 2
+                fi
+            fi
+        done
+        return 1
+    }
+    
+    if download_with_progress "$URL" "$BINARY"; then
+        echo -e "${GREEN}Download successful!${NC}"
     else
-        echo -e "${RED}Download failed: $URL${NC}"
-        echo -e "${RED}Please check your internet connection or if the release exists.${NC}"
-        exit 1
+        echo -e "${RED}Download failed after multiple attempts: $URL${NC}"
+        echo -e "${YELLOW}Trying fallback to latest tagged binary...${NC}"
+        
+        # Try the -latest- prefixed version as fallback
+        FALLBACK_BINARY="hubsync-latest-${OS}-${ARCH}"
+        if [[ "$OS" == "windows" ]]; then
+            FALLBACK_BINARY="${FALLBACK_BINARY}.exe"
+        fi
+        
+        FALLBACK_URL="https://github.com/$REPO/releases/download/$LATEST/$FALLBACK_BINARY"
+        echo -e "${BLUE}Trying $FALLBACK_URL${NC}"
+        
+        if download_with_progress "$FALLBACK_URL" "$BINARY"; then
+            echo -e "${GREEN}Fallback download successful!${NC}"
+        else 
+            echo -e "${RED}All download attempts failed.${NC}"
+            echo -e "${YELLOW}Trying direct download from the main branch...${NC}"
+            
+            # Final fallback: try to download from the main branch's latest build
+            MAIN_URL="https://raw.githubusercontent.com/$REPO/main/bin/hubsync-${OS}-${ARCH}"
+            if [[ "$OS" == "windows" ]]; then
+                MAIN_URL="${MAIN_URL}.exe"
+            fi
+            
+            if download_with_progress "$MAIN_URL" "$BINARY"; then
+                echo -e "${GREEN}Downloaded development version from main branch${NC}"
+                echo -e "${YELLOW}Warning: This may not be a stable release${NC}"
+            else
+                echo -e "${RED}All download attempts failed.${NC}"
+                echo -e "${RED}Please check your internet connection or if the release exists.${NC}"
+                exit 1
+            fi
+        fi
     fi
 
     # Verify download
     if [ ! -f "$BINARY" ]; then
         echo -e "${RED}Downloaded file not found${NC}"
         exit 1
+    fi
+
+    # Check file size to ensure it's not empty or too small
+    FILE_SIZE=$(wc -c < "$BINARY")
+    if [ "$FILE_SIZE" -lt 1000000 ]; then  # Less than 1MB is suspicious for a Go binary
+        echo -e "${YELLOW}Warning: The downloaded binary seems unusually small (${FILE_SIZE} bytes)${NC}"
+        echo -e "${YELLOW}It may be incomplete or corrupted.${NC}"
+        if [ "$1" != "force" ]; then
+            echo -e "${YELLOW}Use --force to install anyway.${NC}"
+            exit 1
+        fi
     fi
 
     # Make binary executable
@@ -180,6 +255,17 @@ install_binary() {
         fi
     fi
 
+    # Backup existing binary if present
+    if [ -f "$INSTALL_DIR/$BINARY_NAME" ]; then
+        echo -e "${YELLOW}Backing up existing binary...${NC}"
+        if ! cp "$INSTALL_DIR/$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME.backup" 2>/dev/null; then
+            echo -e "${YELLOW}Using sudo to create backup...${NC}"
+            sudo cp "$INSTALL_DIR/$BINARY_NAME" "$INSTALL_DIR/$BINARY_NAME.backup" || {
+                echo -e "${YELLOW}Couldn't create backup. Continuing anyway...${NC}"
+            }
+        fi
+    fi
+
     # Install binary
     echo -e "${BLUE}Installing to $INSTALL_DIR/$BINARY_NAME...${NC}"
     if ! mv "$BINARY" "$INSTALL_DIR/$BINARY_NAME" 2>/dev/null; then
@@ -195,7 +281,8 @@ install_binary() {
     echo -e "${BLUE}Verifying installation...${NC}"
     if command -v "$INSTALL_DIR/$BINARY_NAME" &> /dev/null; then
         echo -e "${GREEN}Installation verified!${NC}"
-        echo -e "${GREEN}HubSync version: $($INSTALL_DIR/$BINARY_NAME version)${NC}"
+        VERSION_OUTPUT=$("$INSTALL_DIR/$BINARY_NAME" version 2>/dev/null || echo "unknown")
+        echo -e "${GREEN}HubSync version: $VERSION_OUTPUT${NC}"
     else
         echo -e "${RED}Verification failed. Please check your PATH settings.${NC}"
     fi
@@ -214,8 +301,29 @@ verify_installation() {
         # Check if the installed binary is in PATH
         if [[ ":$PATH:" != *":$INSTALL_DIR:"* ]]; then
             echo -e "${YELLOW}Warning: $INSTALL_DIR is not in your PATH.${NC}"
-            echo -e "${YELLOW}You may need to add it with: ${NC}${BLUE}export PATH=$PATH:$INSTALL_DIR${NC}"
+            case "$SHELL" in
+                */bash)
+                    echo -e "${YELLOW}Add to your ~/.bashrc or ~/.bash_profile:${NC}"
+                    echo -e "${BLUE}export PATH=\"\$PATH:$INSTALL_DIR\"${NC}"
+                    ;;
+                */zsh)
+                    echo -e "${YELLOW}Add to your ~/.zshrc:${NC}"
+                    echo -e "${BLUE}export PATH=\"\$PATH:$INSTALL_DIR\"${NC}"
+                    ;;
+                */fish)
+                    echo -e "${YELLOW}For fish shell, run:${NC}"
+                    echo -e "${BLUE}fish_add_path $INSTALL_DIR${NC}"
+                    ;;
+                *)
+                    echo -e "${YELLOW}Add this directory to your PATH:${NC}"
+                    echo -e "${BLUE}export PATH=\"\$PATH:$INSTALL_DIR\"${NC}"
+                    ;;
+            esac
         fi
+        
+        # Add shell completion suggestion
+        echo -e "${CYAN}To enable shell completion, run:${NC}"
+        echo -e "  ${YELLOW}$BINARY_NAME completion [bash|zsh|fish] > /path/to/completion/file${NC}"
     else
         echo -e "${RED}Installation verification failed.${NC}"
         echo -e "${RED}Please check if $INSTALL_DIR is in your PATH.${NC}"
@@ -241,6 +349,25 @@ print_usage() {
     echo -e "${BLUE}curl -fsSL https://raw.githubusercontent.com/$REPO/main/quickstart.sh | bash${NC}"
     echo ""
     echo -e "${GREEN}Thank you for installing HubSync!${NC}"
+    
+    # Check for updates to this script
+    if [ -n "$LATEST_VERSION" ] && [ -n "$LAST_UPDATED" ]; then
+        echo ""
+        echo -e "${CYAN}This installer script was last updated: ${LAST_UPDATED}${NC}"
+        TODAY=$(date +%Y-%m-%d)
+        # Convert dates to seconds since epoch for comparison
+        LAST_SEC=$(date -d "$LAST_UPDATED" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "$LAST_UPDATED" +%s 2>/dev/null)
+        TODAY_SEC=$(date -d "$TODAY" +%s 2>/dev/null || date -j -f "%Y-%m-%d" "$TODAY" +%s 2>/dev/null)
+        
+        # If the dates can be compared and it's been more than 30 days
+        if [ -n "$LAST_SEC" ] && [ -n "$TODAY_SEC" ]; then
+            DAYS_DIFF=$(( (TODAY_SEC - LAST_SEC) / 86400 ))
+            if [ $DAYS_DIFF -gt 30 ]; then
+                echo -e "${YELLOW}This installer script is over 30 days old. Consider getting a fresh copy:${NC}"
+                echo -e "${BLUE}curl -fsSL https://raw.githubusercontent.com/$REPO/main/install.sh | bash${NC}"
+            fi
+        fi
+    fi
 }
 
 # Main execution

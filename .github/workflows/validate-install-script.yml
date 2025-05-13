@@ -1,0 +1,132 @@
+name: Validate Install Script
+
+on:
+  push:
+    paths:
+      - 'install.sh'
+      - '.github/workflows/validate-install-script.yml'
+  pull_request:
+    paths:
+      - 'install.sh'
+  workflow_dispatch:
+
+jobs:
+  validate:
+    name: Validate Install Script
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Basic syntax check
+        run: |
+          echo "Performing bash syntax check..."
+          bash -n install.sh
+          
+      - name: Check script execution permissions
+        run: |
+          if [ ! -x install.sh ]; then
+            echo "Making install.sh executable"
+            chmod +x install.sh
+          fi
+          
+      - name: Test script with --help
+        run: |
+          echo "Testing help flag..."
+          ./install.sh --help > /dev/null || true
+          
+      - name: Test default variable initialization
+        run: |
+          echo "Checking default variable initialization..."
+          # Extract and validate variables
+          REPO=$(grep -E "^REPO=" install.sh | cut -d '"' -f2)
+          echo "REPO: $REPO"
+          
+          BINARY_NAME=$(grep -E "^BINARY_NAME=" install.sh | cut -d '"' -f2)
+          echo "BINARY_NAME: $BINARY_NAME"
+          
+          # Ensure that LATEST_VERSION field exists
+          if ! grep -q "^LATEST_VERSION=" install.sh; then
+            echo "ERROR: LATEST_VERSION is not defined in install.sh"
+            exit 1
+          fi
+          
+          # Ensure that LAST_UPDATED field exists
+          if ! grep -q "^LAST_UPDATED=" install.sh; then
+            echo "ERROR: LAST_UPDATED is not defined in install.sh"
+            exit 1
+          fi
+          
+          # Ensure repository name is valid
+          if [[ ! $REPO =~ ^[a-zA-Z0-9_-]+/[a-zA-Z0-9_-]+$ ]]; then
+            echo "ERROR: Repository name format is invalid: $REPO"
+            exit 1
+          fi
+          
+          # Ensure binary name is not empty
+          if [ -z "$BINARY_NAME" ]; then
+            echo "ERROR: Binary name is empty"
+            exit 1
+          fi
+          
+          echo "Variables validated successfully"
+          
+      - name: Test OS detection logic
+        run: |
+          echo "Testing OS detection logic..."
+          
+          # Extract OS detection code
+          OS_DETECTION=$(grep -A20 "detect_system" install.sh)
+          echo "OS detection code found:"
+          echo "$OS_DETECTION"
+          
+          # Get current OS and architecture
+          CURRENT_OS=$(uname | tr '[:upper:]' '[:lower:]')
+          CURRENT_ARCH=$(uname -m)
+          echo "Current OS: $CURRENT_OS"
+          echo "Current architecture: $CURRENT_ARCH"
+          
+          # Use a dry-run test of the script with -v (verbose) shell option 
+          # This shows commands as they run but doesn't execute the full script
+          bash -c "set -v; source <(grep -A50 'detect_system()' install.sh); detect_system" || {
+            echo "ERROR: OS detection logic failed"
+            exit 1
+          }
+          
+          echo "OS detection logic validated successfully"
+      
+      - name: Check for downloadability of script
+        run: |
+          echo "Checking if script can be properly downloaded via curl..."
+          
+          # Test if the script can be properly downloaded with curl
+          curl -fsSL -o test_install.sh "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$(echo ${GITHUB_REF#refs/heads/} | sed 's/\//%2F/g')/install.sh" || {
+            echo "ERROR: Script cannot be downloaded with curl"
+            exit 1
+          }
+          
+          # Verify downloaded script has correct content
+          if ! diff -q install.sh test_install.sh > /dev/null; then
+            echo "ERROR: Downloaded script doesn't match source"
+            exit 1
+          fi
+          
+          echo "Script can be downloaded successfully"
+      
+      - name: Validate one-liner command
+        run: |
+          echo "Validating one-liner installation command..."
+          
+          # Create a test command that just validates the script without installing
+          # The command pipes the script to 'bash -n' for syntax validation only
+          curl -fsSL "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/$(echo ${GITHUB_REF#refs/heads/} | sed 's/\//%2F/g')/install.sh" | bash -n || {
+            echo "ERROR: One-liner installation command has syntax errors"
+            exit 1
+          }
+          
+          echo "One-liner installation command is valid"

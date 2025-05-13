@@ -9,10 +9,18 @@ on:
   pull_request:
     branches:
       - main
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (with v prefix, e.g., v1.2.3)'
+        required: false
+        type: string
 
+# Use central configuration for Docker settings
 env:
   DOCKER_REGISTRY: docker.io
   DOCKER_IMAGE: yugasun/hubsync
+  PLATFORMS: linux/amd64,linux/arm64
 
 jobs:
   build-and-push:
@@ -20,54 +28,119 @@ jobs:
     permissions:
       contents: read
       packages: write
-
+    
     steps:
       - name: Checkout code
-        uses: actions/checkout@v3
+        uses: actions/checkout@v4
         with:
-          fetch-depth: 0 # Important for git describe to work properly
-
+          fetch-depth: 0  # Important for git describe to work properly
+          ref: ${{ inputs.version || github.ref }}
+      
       - name: Extract version information
         id: version
         run: |
-          GIT_VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+          # If version was provided via workflow_dispatch
+          if [ -n "${{ inputs.version }}" ]; then
+            GIT_VERSION="${{ inputs.version }}"
+            echo "Using provided version: $GIT_VERSION"
+          # Determine version from git tags or from tag event
+          elif [[ $GITHUB_REF == refs/tags/v* ]]; then
+            GIT_VERSION=${GITHUB_REF#refs/tags/}
+            echo "Using tag version: $GIT_VERSION"
+          else
+            GIT_VERSION=$(git describe --tags --always --dirty 2>/dev/null || echo "dev")
+            echo "Using git-derived version: $GIT_VERSION"
+          fi
 
           echo "GIT_VERSION=${GIT_VERSION}" >> $GITHUB_ENV
           echo "VERSION=${GIT_VERSION#v}" >> $GITHUB_ENV  # Remove 'v' prefix for Docker tags
+          
+          # Set short SHA for dev builds
+          if [[ "$GIT_VERSION" == "dev" ]]; then
+            SHORT_SHA=$(git rev-parse --short HEAD)
+            echo "SHORT_SHA=${SHORT_SHA}" >> $GITHUB_ENV
+            echo "DEV_TAG=dev-${SHORT_SHA}" >> $GITHUB_ENV
+          fi
 
           echo "git_version=${GIT_VERSION}" >> $GITHUB_OUTPUT
+          echo "Version extracted: ${GIT_VERSION}"
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v2
-
-      - name: Extract metadata for Docker
+      - name: Docker Metadata
         id: meta
-        uses: docker/metadata-action@v4
+        uses: docker/metadata-action@v5
         with:
           images: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE }}
           tags: |
-            type=ref,event=branch
-            type=ref,event=pr
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=sha,format=long
+            type=raw,value=${{ env.VERSION }}
+            type=raw,value=latest,enable=${{ env.VERSION != 'dev' && !contains(env.VERSION, '-') }}
+            type=semver,pattern={{major}}.{{minor}},value=${{ env.VERSION }}
+            type=semver,pattern={{major}},value=${{ env.VERSION }}
+            type=raw,value=${{ env.DEV_TAG }},enable=${{ env.GIT_VERSION == 'dev' }}
+          
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+        with:
+          platforms: arm64,amd64
 
-      - name: Log in to Docker Hub
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-flags: --debug
+
+      - name: Cache Docker layers
+        uses: actions/cache@v4
+        with:
+          path: /tmp/.buildx-cache
+          key: ${{ runner.os }}-buildx-${{ github.sha }}
+          restore-keys: |
+            ${{ runner.os }}-buildx-
+
+      - name: Login to Docker Hub
         if: github.event_name != 'pull_request'
-        uses: docker/login-action@v2
+        uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_PASSWORD }}
 
       - name: Build and push Docker image
-        uses: docker/build-push-action@v4
+        uses: docker/build-push-action@v5
         with:
           context: .
           push: ${{ github.event_name != 'pull_request' }}
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-          platforms: linux/amd64,linux/arm64
+          platforms: ${{ env.PLATFORMS }}
+          cache-from: type=local,src=/tmp/.buildx-cache
+          cache-to: type=local,dest=/tmp/.buildx-cache-new,mode=max
           build-args: |
             VERSION=${{ env.GIT_VERSION }}
+            BUILD_DATE=$(date -u +'%Y-%m-%dT%H:%M:%SZ')
+            COMMIT_SHA=${{ github.sha }}
+      
+      # This step is necessary to prevent cache from growing indefinitely
+      - name: Move cache
+        if: always()
+        run: |
+          rm -rf /tmp/.buildx-cache
+          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+      - name: Verify Docker image
+        if: github.event_name != 'pull_request'
+        run: |
+          echo "Verifying published Docker image..."
+          DOCKER_TAG="${{ env.VERSION }}"
+          
+          # For dev builds use the dev tag
+          if [[ "${{ env.GIT_VERSION }}" == "dev" ]]; then
+            DOCKER_TAG="${{ env.DEV_TAG }}"
+          fi
+          
+          # Wait a moment for Docker Hub to process the image
+          sleep 10
+          
+          # Pull the image to verify it exists and is accessible
+          docker pull ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE }}:$DOCKER_TAG || \
+            echo "Warning: Unable to verify image. It may still be processing on Docker Hub."
+          
+          # Report success
+          echo "Docker image published: ${{ env.DOCKER_REGISTRY }}/${{ env.DOCKER_IMAGE }}:$DOCKER_TAG"

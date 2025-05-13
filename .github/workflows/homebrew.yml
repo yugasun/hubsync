@@ -3,11 +3,19 @@ name: Update Homebrew Formula
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to update (without v prefix)'
+        required: true
+        type: string
 
 jobs:
   update-homebrew:
     name: Update Homebrew Formula
     runs-on: ubuntu-latest
+    permissions:
+      contents: write
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
@@ -18,47 +26,103 @@ jobs:
       - name: Set version variable
         id: version
         run: |
-          VERSION=${GITHUB_REF#refs/tags/v}
+          # Handle both automatic (from release) and manual trigger
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            # Manual trigger with provided version
+            VERSION="${{ github.event.inputs.version }}"
+            echo "Using manual version: $VERSION"
+          else
+            # Automatic trigger from release event
+            VERSION=${GITHUB_REF#refs/tags/v}
+            echo "Using release version: $VERSION"
+          fi
+          
           echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "Version: $VERSION"
+          echo "Version to use: $VERSION"
 
       - name: Download binaries and calculate SHA256
         id: sha256
         run: |
           mkdir -p temp_downloads
           
+          # Retry logic for downloads
+          download_with_retry() {
+            local url=$1
+            local output=$2
+            local max_attempts=3
+            local attempt=1
+            
+            while [ $attempt -le $max_attempts ]; do
+              echo "Download attempt $attempt for $url"
+              if curl -sSL "$url" -o "$output"; then
+                echo "Download successful"
+                return 0
+              else
+                echo "Download failed, attempt $attempt of $max_attempts"
+                attempt=$((attempt + 1))
+                sleep 2
+              fi
+            done
+            
+            echo "All download attempts failed for $url"
+            return 1
+          }
+          
           # Download macOS Intel binary
-          curl -sL "https://github.com/yugasun/hubsync/releases/download/v${{ steps.version.outputs.version }}/hubsync-darwin-amd64" -o temp_downloads/hubsync-darwin-amd64
+          echo "Downloading macOS Intel binary..."
+          download_with_retry "https://github.com/yugasun/hubsync/releases/download/v${{ steps.version.outputs.version }}/hubsync-darwin-amd64" "temp_downloads/hubsync-darwin-amd64" || exit 1
           DARWIN_AMD64_SHA256=$(sha256sum temp_downloads/hubsync-darwin-amd64 | cut -d ' ' -f1)
           echo "darwin_amd64_sha256=$DARWIN_AMD64_SHA256" >> $GITHUB_OUTPUT
           
           # Download macOS Apple Silicon binary
-          curl -sL "https://github.com/yugasun/hubsync/releases/download/v${{ steps.version.outputs.version }}/hubsync-darwin-arm64" -o temp_downloads/hubsync-darwin-arm64
+          echo "Downloading macOS Apple Silicon binary..."
+          download_with_retry "https://github.com/yugasun/hubsync/releases/download/v${{ steps.version.outputs.version }}/hubsync-darwin-arm64" "temp_downloads/hubsync-darwin-arm64" || exit 1
           DARWIN_ARM64_SHA256=$(sha256sum temp_downloads/hubsync-darwin-arm64 | cut -d ' ' -f1)
           echo "darwin_arm64_sha256=$DARWIN_ARM64_SHA256" >> $GITHUB_OUTPUT
           
           # Download Linux Intel binary
-          curl -sL "https://github.com/yugasun/hubsync/releases/download/v${{ steps.version.outputs.version }}/hubsync-linux-amd64" -o temp_downloads/hubsync-linux-amd64
+          echo "Downloading Linux Intel binary..."
+          download_with_retry "https://github.com/yugasun/hubsync/releases/download/v${{ steps.version.outputs.version }}/hubsync-linux-amd64" "temp_downloads/hubsync-linux-amd64" || exit 1
           LINUX_AMD64_SHA256=$(sha256sum temp_downloads/hubsync-linux-amd64 | cut -d ' ' -f1)
           echo "linux_amd64_sha256=$LINUX_AMD64_SHA256" >> $GITHUB_OUTPUT
           
           # Download Linux ARM binary
-          curl -sL "https://github.com/yugasun/hubsync/releases/download/v${{ steps.version.outputs.version }}/hubsync-linux-arm64" -o temp_downloads/hubsync-linux-arm64
+          echo "Downloading Linux ARM binary..."
+          download_with_retry "https://github.com/yugasun/hubsync/releases/download/v${{ steps.version.outputs.version }}/hubsync-linux-arm64" "temp_downloads/hubsync-linux-arm64" || exit 1
           LINUX_ARM64_SHA256=$(sha256sum temp_downloads/hubsync-linux-arm64 | cut -d ' ' -f1)
           echo "linux_arm64_sha256=$LINUX_ARM64_SHA256" >> $GITHUB_OUTPUT
           
-          echo "SHA256 checksums calculated successfully"
+          echo "SHA256 checksums calculated successfully:"
+          echo "  macOS (Intel): $DARWIN_AMD64_SHA256"
+          echo "  macOS (ARM): $DARWIN_ARM64_SHA256"
+          echo "  Linux (Intel): $LINUX_AMD64_SHA256"
+          echo "  Linux (ARM): $LINUX_ARM64_SHA256"
 
       - name: Update Homebrew formula
         run: |
+          # Check if formula file exists
+          if [ ! -f "homebrew/hubsync.rb" ]; then
+            echo "Error: Homebrew formula file not found at homebrew/hubsync.rb"
+            exit 1
+          fi
+          
+          # Create backup of original file
+          cp homebrew/hubsync.rb homebrew/hubsync.rb.bak
+          
+          echo "Updating version in formula to ${{ steps.version.outputs.version }}"
           # Update version in the formula
           sed -i "s/version \"[^\"]*\"/version \"${{ steps.version.outputs.version }}\"/" homebrew/hubsync.rb
           
           # Update SHA256 checksums for each platform
-          sed -i "s/sha256 \"REPLACE_WITH_ACTUAL_SHA256\".*# darwin amd64$/sha256 \"${{ steps.sha256.outputs.darwin_amd64_sha256 }}\"  # darwin amd64/" homebrew/hubsync.rb
-          sed -i "s/sha256 \"REPLACE_WITH_ACTUAL_SHA256\".*# darwin arm64$/sha256 \"${{ steps.sha256.outputs.darwin_arm64_sha256 }}\"  # darwin arm64/" homebrew/hubsync.rb
-          sed -i "s/sha256 \"REPLACE_WITH_ACTUAL_SHA256\".*# linux amd64$/sha256 \"${{ steps.sha256.outputs.linux_amd64_sha256 }}\"  # linux amd64/" homebrew/hubsync.rb
-          sed -i "s/sha256 \"REPLACE_WITH_ACTUAL_SHA256\".*# linux arm64$/sha256 \"${{ steps.sha256.outputs.linux_arm64_sha256 }}\"  # linux arm64/" homebrew/hubsync.rb
+          echo "Updating SHA256 checksums in formula"
+          sed -i "s/sha256 \"[^\"]*\".*# darwin amd64$/sha256 \"${{ steps.sha256.outputs.darwin_amd64_sha256 }}\"  # darwin amd64/" homebrew/hubsync.rb
+          sed -i "s/sha256 \"[^\"]*\".*# darwin arm64$/sha256 \"${{ steps.sha256.outputs.darwin_arm64_sha256 }}\"  # darwin arm64/" homebrew/hubsync.rb
+          sed -i "s/sha256 \"[^\"]*\".*# linux amd64$/sha256 \"${{ steps.sha256.outputs.linux_amd64_sha256 }}\"  # linux amd64/" homebrew/hubsync.rb
+          sed -i "s/sha256 \"[^\"]*\".*# linux arm64$/sha256 \"${{ steps.sha256.outputs.linux_arm64_sha256 }}\"  # linux arm64/" homebrew/hubsync.rb
+          
+          # Display diff to verify changes
+          echo "Changes made to formula:"
+          diff -u homebrew/hubsync.rb.bak homebrew/hubsync.rb || true
 
       - name: Commit and push changes
         run: |
@@ -66,5 +130,34 @@ jobs:
           git config --local user.name "GitHub Action"
           
           git add homebrew/hubsync.rb
+          
+          # Only commit if there are actual changes
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+            exit 0
+          fi
+          
           git commit -m "chore: update Homebrew formula for v${{ steps.version.outputs.version }}"
-          git push origin HEAD:main
+          
+          # Push with retry logic
+          MAX_ATTEMPTS=3
+          ATTEMPT=1
+          
+          while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
+            echo "Push attempt $ATTEMPT of $MAX_ATTEMPTS"
+            if git push origin HEAD:main; then
+              echo "Push successful"
+              break
+            else
+              echo "Push failed, retrying..."
+              git pull --rebase origin main
+              ATTEMPT=$((ATTEMPT + 1))
+              if [ $ATTEMPT -gt $MAX_ATTEMPTS ]; then
+                echo "All push attempts failed"
+                exit 1
+              fi
+              sleep 2
+            fi
+          done
+          
+          echo "Homebrew formula updated successfully for version v${{ steps.version.outputs.version }}"

@@ -1,0 +1,92 @@
+name: Generate Version
+
+on:
+  workflow_call:
+    inputs:
+      release_type:
+        description: 'Release Type'
+        required: false
+        default: ''
+        type: string
+    outputs:
+      version:
+        description: 'The generated version'
+        value: ${{ jobs.versioning.outputs.version }}
+      is_new_release:
+        description: 'Whether a new release was created'
+        value: ${{ jobs.versioning.outputs.is_new_release }}
+
+  workflow_dispatch:
+    inputs:
+      release_type:
+        description: 'Release Type'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  versioning:
+    name: Semantic Versioning
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      issues: write
+      pull-requests: write
+    outputs:
+      version: ${{ steps.semantic.outputs.new_release_version || steps.fallback.outputs.version }}
+      is_new_release: ${{ steps.semantic.outputs.new_release_published }}
+      
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.GH_TOKEN }}
+          
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: ${{ vars.NODE_VERSION || '18' }}
+          cache: 'npm'
+          
+      - name: Install dependencies
+        run: npm install -g semantic-release @semantic-release/git @semantic-release/github @semantic-release/changelog @semantic-release/commit-analyzer @semantic-release/release-notes-generator
+        
+      - name: Semantic Release
+        id: semantic
+        env:
+          GITHUB_TOKEN: ${{ secrets.GH_TOKEN }}
+        run: |
+          # Determine release type based on input
+          RELEASE_TYPE="${{ inputs.release_type }}"
+          
+          if [ -n "$RELEASE_TYPE" ]; then
+            echo "Running semantic-release with type: $RELEASE_TYPE"
+            npx semantic-release --release-type $RELEASE_TYPE
+          else
+            echo "Running standard semantic-release"
+            npx semantic-release
+          fi
+          
+          if [ $? -eq 0 ]; then
+            echo "new_release_published=true" >> $GITHUB_OUTPUT
+            VERSION=$(git describe --tags --abbrev=0)
+            echo "new_release_version=$VERSION" >> $GITHUB_OUTPUT
+            echo "Released version: $VERSION"
+          else
+            echo "new_release_published=false" >> $GITHUB_OUTPUT
+            echo "No new release was published"
+          fi
+
+      # Fallback in case no new version was created
+      - name: Determine current version
+        id: fallback
+        if: steps.semantic.outputs.new_release_published != 'true'
+        run: |
+          CURRENT_VERSION=$(git describe --tags --abbrev=0 2>/dev/null || echo "v0.0.0")
+          echo "version=$CURRENT_VERSION" >> $GITHUB_OUTPUT
+          echo "Current version: $CURRENT_VERSION"

@@ -114,6 +114,9 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           
+          # Create directory structure first
+          mkdir -p homebrew-tap/Formula
+          
           # Create Formula file in tap repository
           cat > homebrew-tap/Formula/hubsync.rb << EOF
           class Hubsync < Formula
@@ -153,9 +156,6 @@ jobs:
             end
           end
           EOF
-          
-          # Create directory structure if it doesn't exist
-          mkdir -p homebrew-tap/Formula
           
           echo "Created formula file for hubsync version $VERSION"
       

@@ -402,17 +402,6 @@ jobs:
                   core.setFailed(`Error posting success comment: ${error.message}`);
                 });
                 
-                // Close issue
-                await github.rest.issues.update({
-                  issue_number: issueNumber,
-                  owner: context.repo.owner,
-                  repo: context.repo.repo,
-                  state: 'closed',
-                  state_reason: 'completed'
-                }).catch(error => {
-                  console.log(`Error closing issue: ${error.message}`);
-                });
-                
                 console.log('Success update posted and issue closed successfully');
               }
               // If neither success nor failure (unexpected state)

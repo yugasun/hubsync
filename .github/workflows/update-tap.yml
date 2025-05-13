@@ -4,12 +4,12 @@ on:
   # Triggered when a release is published
   release:
     types: [published]
-  
+
   # Allow manual trigger
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version to update (without v prefix)'
+        description: "Version to update (without v prefix)"
         required: true
         type: string
 
@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
-    
+
     steps:
       - name: Set version variable
         id: version
@@ -34,29 +34,29 @@ jobs:
             VERSION=${GITHUB_REF#refs/tags/v}
             echo "Using release version: $VERSION"
           fi
-          
+
           echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "Version to use: $VERSION"
-      
+
       - name: Checkout hubsync repository
         uses: actions/checkout@v4
         with:
           path: hubsync
           fetch-depth: 1
-      
+
       - name: Checkout homebrew-tap repository
         uses: actions/checkout@v4
         with:
           repository: yugasun/homebrew-tap
           path: homebrew-tap
           token: ${{ secrets.GH_TOKEN }}
-      
+
       - name: Download binaries and calculate SHA256
         id: sha256
         working-directory: hubsync
         run: |
           mkdir -p temp_downloads
-          
+
           # Retry logic for downloads
           download_with_retry() {
             local url=$1
@@ -79,44 +79,44 @@ jobs:
             echo "All download attempts failed for $url"
             return 1
           }
-          
+
           # Download macOS Intel binary
           echo "Downloading macOS Intel binary..."
           download_with_retry "https://github.com/yugasun/hubsync/releases/download/v${{ steps.version.outputs.version }}/hubsync-darwin-amd64" "temp_downloads/hubsync-darwin-amd64" || exit 1
           DARWIN_AMD64_SHA256=$(sha256sum temp_downloads/hubsync-darwin-amd64 | cut -d ' ' -f1)
           echo "darwin_amd64_sha256=$DARWIN_AMD64_SHA256" >> $GITHUB_OUTPUT
-          
+
           # Download macOS Apple Silicon binary
           echo "Downloading macOS Apple Silicon binary..."
           download_with_retry "https://github.com/yugasun/hubsync/releases/download/v${{ steps.version.outputs.version }}/hubsync-darwin-arm64" "temp_downloads/hubsync-darwin-arm64" || exit 1
           DARWIN_ARM64_SHA256=$(sha256sum temp_downloads/hubsync-darwin-arm64 | cut -d ' ' -f1)
           echo "darwin_arm64_sha256=$DARWIN_ARM64_SHA256" >> $GITHUB_OUTPUT
-          
+
           # Download Linux Intel binary
           echo "Downloading Linux Intel binary..."
           download_with_retry "https://github.com/yugasun/hubsync/releases/download/v${{ steps.version.outputs.version }}/hubsync-linux-amd64" "temp_downloads/hubsync-linux-amd64" || exit 1
           LINUX_AMD64_SHA256=$(sha256sum temp_downloads/hubsync-linux-amd64 | cut -d ' ' -f1)
           echo "linux_amd64_sha256=$LINUX_AMD64_SHA256" >> $GITHUB_OUTPUT
-          
+
           # Download Linux ARM binary
           echo "Downloading Linux ARM binary..."
           download_with_retry "https://github.com/yugasun/hubsync/releases/download/v${{ steps.version.outputs.version }}/hubsync-linux-arm64" "temp_downloads/hubsync-linux-arm64" || exit 1
           LINUX_ARM64_SHA256=$(sha256sum temp_downloads/hubsync-linux-arm64 | cut -d ' ' -f1)
           echo "linux_arm64_sha256=$LINUX_ARM64_SHA256" >> $GITHUB_OUTPUT
-          
+
           echo "SHA256 checksums calculated successfully:"
           echo "  macOS (Intel): $DARWIN_AMD64_SHA256"
           echo "  macOS (ARM): $DARWIN_ARM64_SHA256"
           echo "  Linux (Intel): $LINUX_AMD64_SHA256"
           echo "  Linux (ARM): $LINUX_ARM64_SHA256"
-      
+
       - name: Copy formula to tap repository
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          
+
           # Create directory structure first
           mkdir -p homebrew-tap/Formula
-          
+
           # Create Formula file in tap repository
           cat > homebrew-tap/Formula/hubsync.rb << EOF
           class Hubsync < Formula
@@ -156,23 +156,29 @@ jobs:
             end
           end
           EOF
-          
+
           echo "Created formula file for hubsync version $VERSION"
-      
+
       - name: Commit and push changes to tap
         working-directory: homebrew-tap
         run: |
           git config user.name "GitHub Action"
           git config user.email "action@github.com"
-          
+
           git add Formula/hubsync.rb
-          
+
+          # Only commit if there are changes
+          if git diff --cached --quiet; then
+            echo "No changes to commit."
+            exit 0
+          fi
+
           git commit -m "Update hubsync to v${{ steps.version.outputs.version }}"
-          
+
           # Push with retry logic
           MAX_ATTEMPTS=3
           ATTEMPT=1
-          
+
           while [ $ATTEMPT -le $MAX_ATTEMPTS ]; do
             echo "Push attempt $ATTEMPT of $MAX_ATTEMPTS"
             if git push origin main; then
@@ -189,5 +195,5 @@ jobs:
               sleep 2
             fi
           done
-          
+
           echo "Homebrew tap updated successfully for version v${{ steps.version.outputs.version }}"

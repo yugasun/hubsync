@@ -8,7 +8,7 @@ REPO="yugasun/hubsync"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="hubsync"
 # This value will be auto-updated by the release workflow
-LATEST_VERSION="0.2.2"
+LATEST_VERSION="0.2.3"
 # This timestamp helps track when the script was last updated
 LAST_UPDATED="2025-05-13"
 

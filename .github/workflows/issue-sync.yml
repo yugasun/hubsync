@@ -22,23 +22,23 @@ jobs:
           script: |
             let isAuthorized = false;
             let issueNumber = null;
-            
+
             // Check if user is authorized
             if ('${{ github.actor }}' === 'yugasun' || '${{ github.event_name }}' === 'issues') {
               isAuthorized = true;
             }
-            
+
             // Get issue number based on event type
             if ('${{ github.event_name }}' === 'workflow_dispatch') {
               issueNumber = parseInt('${{ github.event.inputs.issue_number }}', 10);
             } else {
               issueNumber = context.payload.issue?.number;
             }
-            
+
             // Set outputs using core module
             core.setOutput('is-authorized', isAuthorized ? 'true' : 'false');
             core.setOutput('issue-number', issueNumber);
-            
+
             // Log status
             console.log(`Authorization: ${isAuthorized ? 'Approved' : 'Denied'}, Issue #${issueNumber}`);
 
@@ -92,7 +92,7 @@ jobs:
           script: |
             let isEligible = false;
             const issueNumber = parseInt('${{ steps.auth.outputs.issue-number }}', 10);
-            
+
             // For workflow dispatch events, always eligible
             if ('${{ github.event_name }}' === 'workflow_dispatch') {
               isEligible = true;
@@ -105,10 +105,10 @@ jobs:
               
               isEligible = hasHubsyncLabel || hasTitlePrefix;
             }
-            
+
             core.setOutput('is-eligible', isEligible ? 'true' : 'false');
             console.log(`Issue #${issueNumber} eligibility: ${isEligible ? 'Eligible' : 'Not eligible'}`);
-            
+
             // If not eligible but authorized, add a comment explaining why
             if (!isEligible && '${{ github.event_name }}' === 'issues') {
               await github.rest.issues.createComment({
@@ -159,7 +159,7 @@ jobs:
           script: |
             const issueNumber = parseInt('${{ steps.auth.outputs.issue-number }}', 10);
             let issueBody = '';
-            
+
             // Get issue body based on event type
             if ('${{ github.event_name }}' === 'workflow_dispatch') {
               // For manual workflow dispatch, fetch the issue content
@@ -178,11 +178,11 @@ jobs:
               // For issue events, use the event payload
               issueBody = context.payload.issue?.body || '';
             }
-            
+
             // Try to extract JSON format with improved parsing
             let content = '';
             let status = 'invalid';
-            
+
             try {
               // First try to find any JSON-like structure 
               let jsonContent = '';
@@ -234,7 +234,7 @@ jobs:
               // Default to empty array if invalid
               content = JSON.stringify({"hubsync":[]});
             }
-            
+
             // Set outputs
             core.setOutput('content', content);
             core.setOutput('status', status);
@@ -260,115 +260,183 @@ jobs:
         with:
           script: |
             const fs = require('fs');
-            const issueNumber = parseInt('${{ steps.extract.outputs.issue-number }}', 10);
+
+            const issueNumber = parseInt('${{ steps.auth.outputs.issue-number }}', 10);
             const syncOutcome = '${{ steps.sync.outcome }}';
             const processStatus = '${{ steps.extract.outputs.status }}';
 
-            // For invalid JSON or failed sync
-            if (processStatus === 'invalid' || syncOutcome === 'failure') {
-              // Add failure label
-              await github.rest.issues.addLabels({
-                issue_number: issueNumber,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                labels: ['failure']
-              }).catch(error => console.log('Error adding labels:', error));
-              
-              // Get error details
-              let errorLog = '';
-              try {
-                if (fs.existsSync('output.log')) {
-                  errorLog = fs.readFileSync('output.log', 'utf8');
+            console.log(`Starting Post issue update with: Issue #${issueNumber}, Sync outcome: ${syncOutcome}, Process status: ${processStatus}`);
+
+            if (isNaN(issueNumber)) {
+              core.setFailed(`Invalid issue number: ${issueNumber}`);
+              return;
+            }
+
+            try {
+              // For invalid JSON or failed sync
+              if (processStatus === 'invalid' || syncOutcome === 'failure') {
+                console.log('Posting failure update to issue');
+                
+                // Add failure label
+                await github.rest.issues.addLabels({
+                  issue_number: issueNumber,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  labels: ['failure']
+                }).catch(error => {
+                  console.log(`Error adding failure labels: ${error.message}`);
+                  // Continue execution even if label fails
+                });
+                
+                // Get error details
+                let errorLog = '';
+                try {
+                  if (fs.existsSync('output.log')) {
+                    errorLog = fs.readFileSync('output.log', 'utf8');
+                  } else {
+                    errorLog = 'No output.log found, but operation failed.';
+                    console.log('No output.log found for error details');
+                  }
+                } catch (error) {
+                  errorLog = `Error reading output.log: ${error.message}`;
+                  console.log(`Error reading output.log: ${error.message}`);
                 }
-              } catch (error) {
-                errorLog = 'Error details unavailable';
-              }
-              
-              // Post failure comment
-              const errorMessage = [
-                '## ❌ Image Sync Failed',
-                '',
-                'Please check the format of your request and try again.',
-                '',
-                '### Troubleshooting',
-                '- Make sure your JSON is valid and follows the required format: `{ "hubsync": ["image1", "image2"] }`',
-                '- Check that the Docker images specified exist and are accessible',
-                '- Verify your credentials have the necessary permissions',
-                '',
-                '### Error Details',
-                '```',
-                errorLog,
-                '```',
-                '',
-                '### Need help?',
-                'Feel free to update this issue with a corrected format.'
-              ].join('\n');
-              
-              await github.rest.issues.createComment({
-                issue_number: issueNumber,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: errorMessage
-              });
-            } 
-            // For successful sync
-            else if (syncOutcome === 'success') {
-              // Add success labels
-              await github.rest.issues.addLabels({
-                issue_number: issueNumber,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                labels: ['success', 'synchronized']
-              }).catch(error => console.log('Error adding labels:', error));
-              
-              // Get output information
-              let output = 'No output file generated, but operation completed successfully.';
-              try {
-                if (fs.existsSync('output.log')) {
-                  output = fs.readFileSync('output.log', 'utf8').trim();
+                
+                // Post failure comment
+                const errorMessage = [
+                  '## ❌ Image Sync Failed',
+                  '',
+                  'Please check the format of your request and try again.',
+                  '',
+                  '### Troubleshooting',
+                  '- Make sure your JSON is valid and follows the required format: `{ "hubsync": ["image1", "image2"] }`',
+                  '- Check that the Docker images specified exist and are accessible',
+                  '- Verify your credentials have the necessary permissions',
+                  '',
+                  '### Error Details',
+                  '```',
+                  errorLog || 'No specific error details available',
+                  '```',
+                  '',
+                  '### Need help?',
+                  'Feel free to update this issue with a corrected format.'
+                ].join('\n');
+                
+                await github.rest.issues.createComment({
+                  issue_number: issueNumber,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: errorMessage
+                }).catch(error => {
+                  console.log(`Error posting failure comment: ${error.message}`);
+                  core.setFailed(`Error posting failure comment: ${error.message}`);
+                });
+                
+                console.log('Failure update posted successfully');
+              } 
+              // For successful sync
+              else if (syncOutcome === 'success') {
+                console.log('Posting success update to issue');
+                
+                // Add success labels
+                await github.rest.issues.addLabels({
+                  issue_number: issueNumber,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  labels: ['success', 'synchronized']
+                }).catch(error => {
+                  console.log(`Error adding success labels: ${error.message}`);
+                  // Continue execution even if label fails
+                });
+                
+                // Get output information
+                let output = 'No output file generated, but operation completed successfully.';
+                try {
+                  if (fs.existsSync('output.log')) {
+                    output = fs.readFileSync('output.log', 'utf8').trim();
+                  } else {
+                    console.log('No output.log found for success details');
+                  }
+                } catch (error) {
+                  console.log(`Error reading output.log: ${error.message}`);
+                  // Keep default message
                 }
-              } catch (error) {
-                // Keep default message
+                
+                // Get image count safely
+                let imageCount = 0;
+                try {
+                  const contentRaw = '${{ steps.extract.outputs.content }}';
+                  if (contentRaw) {
+                    const contentObj = JSON.parse(contentRaw);
+                    imageCount = contentObj && contentObj.hubsync && Array.isArray(contentObj.hubsync) 
+                      ? contentObj.hubsync.length 
+                      : 0;
+                  } else {
+                    console.log('Extract content output is empty');
+                    imageCount = 'unknown number of';
+                  }
+                } catch (e) {
+                  console.log(`Error parsing content: ${e.message}`);
+                  imageCount = "some";
+                }
+                
+                // Post success message
+                const successMessage = [
+                  '## ✅ Image Sync Completed Successfully!',
+                  '',
+                  `Successfully synchronized **${imageCount}** Docker image(s).`,
+                  '',
+                  '### Pull Commands',
+                  '```bash',
+                  output,
+                  '```'
+                ].join('\n');
+                
+                await github.rest.issues.createComment({
+                  issue_number: issueNumber,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: successMessage
+                }).catch(error => {
+                  console.log(`Error posting success comment: ${error.message}`);
+                  core.setFailed(`Error posting success comment: ${error.message}`);
+                });
+                
+                // Close issue
+                await github.rest.issues.update({
+                  issue_number: issueNumber,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  state: 'closed',
+                  state_reason: 'completed'
+                }).catch(error => {
+                  console.log(`Error closing issue: ${error.message}`);
+                });
+                
+                console.log('Success update posted and issue closed successfully');
               }
-              
-              // Get image count safely
-              let imageCount = 0;
-              try {
-                const contentRaw = '${{ steps.extract.outputs.content }}';
-                const contentObj = JSON.parse(contentRaw);
-                imageCount = contentObj && contentObj.hubsync && Array.isArray(contentObj.hubsync) 
-                  ? contentObj.hubsync.length 
-                  : 0;
-              } catch (e) {
-                console.log('Error parsing content:', e);
-                imageCount = "some";
+              // If neither success nor failure (unexpected state)
+              else {
+                console.log(`Unexpected state: syncOutcome=${syncOutcome}, processStatus=${processStatus}`);
+                
+                await github.rest.issues.createComment({
+                  issue_number: issueNumber,
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  body: `## ⚠️ Processing Status Unclear
+                  
+                  The workflow completed, but the final status of the synchronization could not be determined.
+                  
+                  Status Information:
+                  - Process status: \`${processStatus}\`
+                  - Sync outcome: \`${syncOutcome}\`
+                  
+                  Please check the workflow logs for more details, or try running the workflow again.`
+                }).catch(error => {
+                  console.log(`Error posting status unclear comment: ${error.message}`);
+                });
               }
-              
-              // Post success message
-              const successMessage = [
-                '## ✅ Image Sync Completed Successfully!',
-                '',
-                `Successfully synchronized **${imageCount}** Docker image(s).`,
-                '',
-                '### Pull Commands',
-                '```bash',
-                output,
-                '```'
-              ].join('\n');
-              
-              await github.rest.issues.createComment({
-                issue_number: issueNumber,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: successMessage
-              });
-              
-              // Close issue
-              await github.rest.issues.update({
-                issue_number: issueNumber,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                state: 'closed',
-                state_reason: 'completed'
-              });
+            } catch (error) {
+              console.log(`Unexpected error in Post issue update: ${error.message}`);
+              core.setFailed(`Unexpected error in Post issue update: ${error.message}`);
             }

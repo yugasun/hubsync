@@ -1,20 +1,41 @@
-name: Workflow Configuration
+name: Shared Configuration
 
-# This file stores shared configuration variables for all workflows
-# Other workflows can use these values for consistency
+# This should be triggered only when called by other workflows
+on:
+  workflow_call:
+    # Define outputs that other workflows can access
+    outputs:
+      go_version:
+        description: "Go version to use"
+        value: ${{ jobs.config.outputs.go_version }}
+      node_version:
+        description: "Node.js version to use"
+        value: ${{ jobs.config.outputs.node_version }}
+      docker_registry:
+        description: "Docker registry URL"
+        value: ${{ jobs.config.outputs.docker_registry }}
+      docker_image:
+        description: "Docker image name"
+        value: ${{ jobs.config.outputs.docker_image }}
+      build_platforms:
+        description: "Matrix configuration for build platforms"
+        value: ${{ jobs.config.outputs.build_platforms }}
 
-env:
-  GO_VERSION: "1.23"
-  NODE_VERSION: "18"
-  DOCKER_REGISTRY: "docker.io"
-  DOCKER_IMAGE: "yugasun/hubsync"
-  
-  # Build matrix configurations
-  BUILD_PLATFORMS: |
-    {
-      "goos": ["linux", "darwin", "windows"],
-      "goarch": ["amd64", "arm64"],
-      "exclude": [
-        {"goos": "windows", "goarch": "arm64"}
-      ]
-    }
+jobs:
+  config:
+    runs-on: ubuntu-latest
+    outputs:
+      go_version: "1.23"
+      node_version: "18"
+      docker_registry: "docker.io"
+      docker_image: "yugasun/hubsync"
+      build_platforms: >-
+        {
+          "goos": ["linux", "darwin", "windows"],
+          "goarch": ["amd64", "arm64"],
+          "exclude": [
+            {"goos": "windows", "goarch": "arm64"}
+          ]
+        }
+    steps:
+      - run: echo "Exporting shared configuration values"

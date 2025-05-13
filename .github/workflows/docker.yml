@@ -16,18 +16,23 @@ on:
         required: false
         type: string
 
-# Use central configuration for Docker settings
-env:
-  DOCKER_REGISTRY: docker.io
-  DOCKER_IMAGE: yugasun/hubsync
-  PLATFORMS: linux/amd64,linux/arm64
-
 jobs:
+  # First call the shared configuration workflow
+  get-config:
+    uses: ./.github/workflows/config.yml
+
   build-and-push:
+    needs: get-config
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write
+    
+    # Use the shared configuration values
+    env:
+      DOCKER_REGISTRY: ${{ needs.get-config.outputs.docker_registry }}
+      DOCKER_IMAGE: ${{ needs.get-config.outputs.docker_image }}
+      PLATFORMS: linux/amd64,linux/arm64
     
     steps:
       - name: Checkout code

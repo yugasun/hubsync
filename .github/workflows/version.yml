@@ -51,7 +51,6 @@ jobs:
         uses: actions/setup-node@v3
         with:
           node-version: ${{ vars.NODE_VERSION || '18' }}
-          cache: 'npm'
           
       - name: Install dependencies
         run: npm install -g semantic-release @semantic-release/git @semantic-release/github @semantic-release/changelog @semantic-release/commit-analyzer @semantic-release/release-notes-generator

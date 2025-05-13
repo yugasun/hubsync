@@ -11,44 +11,37 @@ on:
         type: string
 
 jobs:
-  check-user:
-    name: Check User Permission
+  process-issue:
+    name: Process Issue
     runs-on: ubuntu-latest
-    outputs:
-      is-authorized: ${{ steps.check.outputs.is-authorized }}
-      issue-number: ${{ steps.get-issue.outputs.issue-number }}
     steps:
-      - name: Check if user is authorized
-        id: check
+      - name: Check authorization
+        id: auth
         run: |
+          IS_AUTHORIZED="false"
+          ISSUE_NUMBER=""
+          
+          # Check if user is authorized or event is an issue event
           if [ "${{ github.actor }}" == "yugasun" ] || [ "${{ github.event_name }}" == "issues" ]; then
-            echo "is-authorized=true" >> $GITHUB_OUTPUT
-            echo "User ${{ github.actor }} is authorized to trigger this workflow or event is an issue event"
-          else
-            echo "is-authorized=false" >> $GITHUB_OUTPUT
-            echo "User ${{ github.actor }} is NOT authorized to manually trigger this workflow"
+            IS_AUTHORIZED="true"
           fi
+          
+          # Get issue number based on event type
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            ISSUE_NUMBER="${{ github.event.inputs.issue_number }}"
+          else
+            ISSUE_NUMBER="${{ github.event.issue.number }}"
+          fi
+          
+          echo "is-authorized=$IS_AUTHORIZED" >> $GITHUB_OUTPUT
+          echo "issue-number=$ISSUE_NUMBER" >> $GITHUB_OUTPUT
       
-      - name: Get issue number
-        id: get-issue
-        if: github.event_name == 'workflow_dispatch'
-        run: |
-          echo "issue-number=${{ github.event.inputs.issue_number }}" >> $GITHUB_OUTPUT
-
-  notify-unauthorized:
-    name: Notify Unauthorized User
-    needs: check-user
-    if: needs.check-user.outputs.is-authorized == 'false'
-    runs-on: ubuntu-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Post unauthorized comment
+      - name: Post unauthorized message
+        if: steps.auth.outputs.is-authorized == 'false'
         uses: actions/github-script@v7
         with:
           script: |
-            const issueNumber = parseInt('${{ needs.check-user.outputs.issue-number }}', 10);
+            const issueNumber = parseInt('${{ steps.auth.outputs.issue-number }}', 10);
             if (isNaN(issueNumber)) {
               console.log('Invalid issue number, skipping comment');
               return;
@@ -78,243 +71,246 @@ jobs:
             Feel free to open an issue on this repository for assistance.
             `;
             
-            try {
-              await github.rest.issues.createComment({
-                issue_number: issueNumber,
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                body: unauthorizedMessage
-              });
-              console.log(`Posted unauthorized message to issue #${issueNumber}`);
-            } catch (error) {
-              console.log(`Error posting comment: ${error.message}`);
-            }
+            await github.rest.issues.createComment({
+              issue_number: issueNumber,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: unauthorizedMessage
+            }).catch(error => console.log(`Error posting comment: ${error.message}`));
 
-  sync:
-    name: Sync Docker Images
-    # Run only if:
-    # 1. User is authorized (yugasun for manual triggers)
-    # 2. For issue events, the issue needs hubsync label or [hubsync] in title
-    needs: check-user
-    if: >-
-      needs.check-user.outputs.is-authorized == 'true' &&
-      (github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'issues' && 
-      (contains(github.event.issue.labels.*.name, 'hubsync') || 
-       contains(github.event.issue.title, '[hubsync]'))))
-    runs-on: ubuntu-latest
-    steps:
+      # Proceed only if authorized and issue meets criteria
+      - name: Verify issue eligibility
+        id: verify
+        if: steps.auth.outputs.is-authorized == 'true'
+        run: |
+          IS_ELIGIBLE="false"
+          
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
+            IS_ELIGIBLE="true"
+          elif [ "${{ github.event_name }}" == "issues" ] && 
+               ( ${{ contains(github.event.issue.labels.*.name, 'hubsync') }} || 
+                 ${{ contains(github.event.issue.title, '[hubsync]') }} ); then
+            IS_ELIGIBLE="true"
+          fi
+          
+          echo "is-eligible=$IS_ELIGIBLE" >> $GITHUB_OUTPUT
+      
       - name: Checkout code
+        if: steps.verify.outputs.is-eligible == 'true'
         uses: actions/checkout@v4
       
       - name: Setup Golang
+        if: steps.verify.outputs.is-eligible == 'true'
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
       
       - name: Build HubSync
+        if: steps.verify.outputs.is-eligible == 'true'
         run: make build
       
-      - name: Get issue information
-        id: issue-info
-        if: github.event_name == 'workflow_dispatch'
+      - name: Get issue content
+        id: issue-content
+        if: steps.verify.outputs.is-eligible == 'true'
         uses: actions/github-script@v7
         with:
           script: |
-            const issueNumber = parseInt(context.payload.inputs.issue_number, 10);
+            const issueNumber = parseInt('${{ steps.auth.outputs.issue-number }}', 10);
             if (isNaN(issueNumber)) {
               core.setFailed('Invalid issue number');
-              return;
+              return { body: '', number: 0 };
             }
             
-            const { data: issue } = await github.rest.issues.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issueNumber
-            });
-            
-            return {
-              title: issue.title,
-              body: issue.body,
-              number: issue.number
-            };
+            // For workflow_dispatch, fetch issue data
+            if ('${{ github.event_name }}' === 'workflow_dispatch') {
+              try {
+                const { data: issue } = await github.rest.issues.get({
+                  owner: context.repo.owner,
+                  repo: context.repo.repo,
+                  issue_number: issueNumber
+                });
+                return { body: issue.body, number: issue.number };
+              } catch (error) {
+                core.setFailed(`Failed to fetch issue: ${error.message}`);
+                return { body: '', number: 0 };
+              }
+            } 
+            // For issue events, use the event data directly
+            else {
+              return { 
+                body: '${{ github.event.issue.body }}', 
+                number: ${{ github.event.issue.number }}
+              };
+            }
           result-encoding: string
       
-      - name: Extract image list from issue body
-        id: extract
+      - name: Process issue body
+        id: process
+        if: steps.verify.outputs.is-eligible == 'true'
         run: |
-          # Determine which issue to process
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            ISSUE_BODY='${{ fromJson(steps.issue-info.outputs.result).body }}'
-            ISSUE_NUMBER=${{ fromJson(steps.issue-info.outputs.result).number }}
-          else
-            ISSUE_BODY='${{ github.event.issue.body }}'
-            ISSUE_NUMBER=${{ github.event.issue.number }}
-          fi
+          # Extract issue details
+          ISSUE_BODY='${{ fromJson(steps.issue-content.outputs.result).body }}'
+          ISSUE_NUMBER='${{ fromJson(steps.issue-content.outputs.result).number }}'
           
-          echo "issue_number=$ISSUE_NUMBER" >> $GITHUB_OUTPUT
+          echo "issue-number=$ISSUE_NUMBER" >> $GITHUB_OUTPUT
           
-          # Extract JSON content from issue body
+          # Extract and validate JSON content
           echo "Extracting JSON content from issue body..."
-          CONTENT=$(echo "$ISSUE_BODY" | grep -ozP '{[\s\S]*?}' || echo '')
+          CONTENT=$(echo "$ISSUE_BODY" | perl -0777 -ne 'print $& if /\{(?:[^{}]|(?0))*\}/' || echo '')
           
-          # Validate JSON format
-          if [ -z "$CONTENT" ]; then
+          # Handle missing or invalid JSON
+          if [ -z "$CONTENT" ] || ! echo "$CONTENT" | jq . >/dev/null 2>&1 || ! echo "$CONTENT" | jq -e '.hubsync' >/dev/null 2>&1; then
             echo "content={\"hubsync\":[]}" >> $GITHUB_OUTPUT
-            echo "warning::No valid JSON content found in issue body"
+            echo "status=invalid" >> $GITHUB_OUTPUT
+            echo "warning::Invalid or missing JSON content in issue body" >> $GITHUB_STEP_SUMMARY
             exit 0
           fi
           
-          # Validate using jq
-          if ! echo "$CONTENT" | jq . >/dev/null 2>&1; then
-            echo "content={\"hubsync\":[]}" >> $GITHUB_OUTPUT
-            echo "warning::Invalid JSON format found in issue body"
-            exit 0
-          fi
-          
-          # Escape content for GitHub Actions output
+          # Valid JSON with hubsync array
           ESCAPED_CONTENT=$(echo "$CONTENT" | jq -c . | sed 's/%/%25/g' | sed 's/\n/%0A/g' | sed 's/\r/%0D/g')
           echo "content=$ESCAPED_CONTENT" >> $GITHUB_OUTPUT
+          echo "status=valid" >> $GITHUB_OUTPUT
           
           # Preview what will be synced
           echo "Images to sync:"
-          echo "$CONTENT" | jq -r '.hubsync[]' 2>/dev/null || echo "None or invalid format"
+          echo "$CONTENT" | jq -r '.hubsync[]' 2>/dev/null
       
       - name: Run HubSync
         id: sync
+        if: steps.verify.outputs.is-eligible == 'true' && steps.process.outputs.status == 'valid'
         run: |
           echo "Starting Docker Hub synchronization..."
-          
-          # Save content to file to avoid command line length issues
-          echo '${{ steps.extract.outputs.content }}' > content.json
-          
+          # Using echo directly without temp file improves performance
           ./bin/hubsync \
             --username=${{ secrets.DOCKER_USERNAME }} \
             --password=${{ secrets.DOCKER_PASSWORD }} \
             --repository=${{ secrets.DOCKER_REPOSITORY || '' }} \
             --namespace=${{ secrets.DOCKER_NAMESPACE || 'yugasun' }} \
-            --content=$(cat content.json)
+            --content='${{ steps.process.outputs.content }}'
         continue-on-error: true
       
-      - name: Add success label
-        if: steps.sync.outcome == 'success'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.issues.addLabels({
-              issue_number: ${{ steps.extract.outputs.issue_number }},
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: ['success', 'synchronized']
-            }).catch(error => {
-              console.log('Error adding labels:', error);
-            });
-      
-      - name: Add failure label and comment
-        if: steps.sync.outcome == 'failure'
-        uses: actions/github-script@v7
-        with:
-          script: |
-            // Add failure labels
-            github.rest.issues.addLabels({
-              issue_number: ${{ steps.extract.outputs.issue_number }},
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              labels: ['failure']
-            }).catch(error => {
-              console.log('Error adding failure label:', error);
-            });
-            
-            // Add detailed failure comment
-            const fs = require('fs');
-            let errorLog = '';
-            try {
-              // Try to read error logs if available
-              if (fs.existsSync('output.log')) {
-                errorLog = fs.readFileSync('output.log', 'utf8');
-              }
-            } catch (error) {
-              errorLog = 'Error details unavailable';
-            }
-            
-            const errorMessage = `
-            ## ❌ Image Sync Failed
-            
-            Please check the format of your request and try again.
-            
-            ### Troubleshooting
-            - Make sure your JSON is valid and follows the required format: \`{ "hubsync": ["image1", "image2"] }\`
-            - Check that the Docker images specified exist and are accessible
-            - Verify your credentials have the necessary permissions
-            
-            ### Error Details
-            \`\`\`
-            ${errorLog}
-            \`\`\`
-            
-            ### Need help?
-            Feel free to update this issue with a corrected format.
-            `;
-            
-            github.rest.issues.createComment({
-              issue_number: ${{ steps.extract.outputs.issue_number }},
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: errorMessage
-            });
-      
-      - name: Post success comment with output
-        if: steps.sync.outcome == 'success'
+      - name: Post issue update
+        if: steps.verify.outputs.is-eligible == 'true'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            let output = '';
-            try {
-              if (fs.existsSync('output.log')) {
-                output = fs.readFileSync('output.log', 'utf8').trim();
-              } else {
-                output = 'No output file generated, but operation completed successfully.';
+            const issueNumber = parseInt('${{ steps.process.outputs.issue-number }}', 10);
+            const syncOutcome = '${{ steps.sync.outcome }}';
+            
+            // For invalid JSON or failed sync
+            if ('${{ steps.process.outputs.status }}' === 'invalid' || syncOutcome === 'failure') {
+              // Add failure label
+              await github.rest.issues.addLabels({
+                issue_number: issueNumber,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: ['failure']
+              }).catch(error => console.log('Error adding labels:', error));
+              
+              // Get error details
+              let errorLog = '';
+              try {
+                if (fs.existsSync('output.log')) {
+                  errorLog = fs.readFileSync('output.log', 'utf8');
+                }
+              } catch (error) {
+                errorLog = 'Error details unavailable';
               }
-            } catch (error) {
-              output = 'No output file generated';
-            }
-            
-            // Count number of images synchronized
-            let imageCount = 0;
-            try {
-              const content = JSON.parse('${{ steps.extract.outputs.content }}');
-              if (content.hubsync && Array.isArray(content.hubsync)) {
-                imageCount = content.hubsync.length;
+              
+              // Post failure comment
+              const errorMessage = `
+              ## ❌ Image Sync Failed
+              
+              Please check the format of your request and try again.
+              
+              ### Troubleshooting
+              - Make sure your JSON is valid and follows the required format: \`{ "hubsync": ["image1", "image2"] }\`
+              - Check that the Docker images specified exist and are accessible
+              - Verify your credentials have the necessary permissions
+              
+              ### Error Details
+              \`\`\`
+              ${errorLog}
+              \`\`\`
+              
+              ### Need help?
+              Feel free to update this issue with a corrected format.
+              `;
+              
+              await github.rest.issues.createComment({
+                issue_number: issueNumber,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: errorMessage
+              });
+            } 
+            // For successful sync
+            else if (syncOutcome === 'success') {
+              // Add success labels
+              await github.rest.issues.addLabels({
+                issue_number: issueNumber,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                labels: ['success', 'synchronized']
+              }).catch(error => console.log('Error adding labels:', error));
+              
+              // Get output information
+              let output = 'No output file generated, but operation completed successfully.';
+              try {
+                if (fs.existsSync('output.log')) {
+                  output = fs.readFileSync('output.log', 'utf8').trim();
+                }
+              } catch (error) {
+                // Keep default message
               }
-            } catch (e) {
-              console.log('Error parsing content:', e);
+              
+              // Get image count safely
+              let imageCount = 0;
+              try {
+                const contentRaw = '${{ steps.process.outputs.content }}';
+                let contentObj;
+                
+                // Simplified parsing
+                try {
+                  contentObj = typeof contentRaw === 'object' ? contentRaw : JSON.parse(contentRaw.replace(/^['"]|['"]$/g, ''));
+                } catch (e) {
+                  contentObj = JSON.parse(contentRaw.replace(/\\"/g, '"'));
+                }
+                
+                if (contentObj?.hubsync?.length) {
+                  imageCount = contentObj.hubsync.length;
+                }
+              } catch (e) {
+                imageCount = "some";
+              }
+              
+              // Post success comment
+              const successMessage = `
+              ## ✅ Image Sync Completed Successfully!
+              
+              Successfully synchronized **${imageCount}** Docker image(s).
+              
+              ### Pull Commands
+              \`\`\`bash
+              ${output}
+              \`\`\`
+              `;
+              
+              await github.rest.issues.createComment({
+                issue_number: issueNumber,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: successMessage
+              });
+              
+              // Close issue
+              await github.rest.issues.update({
+                issue_number: issueNumber,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                state: 'closed',
+                state_reason: 'completed'
+              });
             }
-            
-            const successMessage = `
-            ## ✅ Image Sync Completed Successfully!
-            
-            Successfully synchronized **${imageCount}** Docker image(s).
-            
-            ### Pull Commands
-            \`\`\`bash
-            ${output}
-            \`\`\`
-            `;
-            
-            github.rest.issues.createComment({
-              issue_number: ${{ steps.extract.outputs.issue_number }},
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              body: successMessage
-            });
-            
-            // Close the issue if successfully completed
-            github.rest.issues.update({
-              issue_number: ${{ steps.extract.outputs.issue_number }},
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: 'closed',
-              state_reason: 'completed'
-            });

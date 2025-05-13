@@ -8,9 +8,9 @@ REPO="yugasun/hubsync"
 INSTALL_DIR="${INSTALL_DIR:-/usr/local/bin}"
 BINARY_NAME="hubsync"
 # This value will be auto-updated by the release workflow
-LATEST_VERSION=""
+LATEST_VERSION="0.2.2"
 # This timestamp helps track when the script was last updated
-LAST_UPDATED="2023-05-13" 
+LAST_UPDATED="2025-05-13"
 
 # Colors for terminal output
 RED='\033[0;31m'

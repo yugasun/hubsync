@@ -1,3 +1,10 @@
+## [0.2.2](https://github.com/yugasun/hubsync/compare/v0.2.1...v0.2.2) (2025-05-13)
+
+
+### Bug Fixes
+
+* golang lint errors ([ff68a06](https://github.com/yugasun/hubsync/commit/ff68a0692c9768ce497222a4aaf628e7d27568cf))
+
 ## [0.2.1](https://github.com/yugasun/hubsync/compare/v0.2.0...v0.2.1) (2025-05-13)
 
 

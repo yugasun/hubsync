@@ -1,3 +1,10 @@
+## [0.2.1](https://github.com/yugasun/hubsync/compare/v0.2.0...v0.2.1) (2025-05-13)
+
+
+### Bug Fixes
+
+* dockerfile go version ([5390a88](https://github.com/yugasun/hubsync/commit/5390a885e9653a15e38f89f7bc62468c2cf836d2))
+
 # [0.2.0](https://github.com/yugasun/hubsync/compare/v0.1.0...v0.2.0) (2025-05-13)
 
 

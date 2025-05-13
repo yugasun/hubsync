@@ -1,24 +1,24 @@
 class Hubsync < Formula
   desc "Docker Hub Image Synchronization Tool"
   homepage "https://github.com/yugasun/hubsync"
-  version "0.1.0"
+  version "0.2.0"
   license "MIT"
 
   if OS.mac?
     if Hardware::CPU.intel?
       url "https://github.com/yugasun/hubsync/releases/download/v#{version}/hubsync-darwin-amd64"
-      sha256 "REPLACE_WITH_ACTUAL_SHA256"  # darwin amd64
+      sha256 "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5"  # darwin amd64
     elsif Hardware::CPU.arm?
       url "https://github.com/yugasun/hubsync/releases/download/v#{version}/hubsync-darwin-arm64"
-      sha256 "REPLACE_WITH_ACTUAL_SHA256"  # darwin arm64
+      sha256 "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5"  # darwin arm64
     end
   elsif OS.linux?
     if Hardware::CPU.intel?
       url "https://github.com/yugasun/hubsync/releases/download/v#{version}/hubsync-linux-amd64"
-      sha256 "REPLACE_WITH_ACTUAL_SHA256"  # linux amd64
+      sha256 "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5"  # linux amd64
     elsif Hardware::CPU.arm?
       url "https://github.com/yugasun/hubsync/releases/download/v#{version}/hubsync-linux-arm64"
-      sha256 "REPLACE_WITH_ACTUAL_SHA256"  # linux arm64
+      sha256 "0019dfc4b32d63c1392aa264aed2253c1e0c2fb09216f8e2cc269bbfb8bb49b5"  # linux arm64
     end
   end
 

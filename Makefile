@@ -1,7 +1,7 @@
 .PHONY: build run test integration-test clean lint vet cover help all lint-install lint-fix lint-ci
 
 BINARY_NAME=hubsync
-VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+VERSION=$(shell git describe --tags --abbrev=0 2>/dev/null || echo "dev")
 LDFLAGS=-ldflags "-X github.com/yugasun/hubsync/cmd/hubsync.Version=$(VERSION)"
 BUILD_DIR=bin
 PLATFORMS=darwin/amd64 darwin/arm64 linux/amd64 linux/arm64 windows/amd64

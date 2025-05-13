@@ -130,7 +130,7 @@ jobs:
                   repo: context.repo.repo,
                   issue_number: issueNumber
                 });
-                return { body: issue.body, number: issue.number };
+                return { body: issue.body || '', number: issue.number };
               } catch (error) {
                 core.setFailed(`Failed to fetch issue: ${error.message}`);
                 return { body: '', number: 0 };
@@ -138,9 +138,11 @@ jobs:
             } 
             // For issue events, use the event data directly
             else {
+              // When using issue event, properly format body as a single line JSON string
+              const issueBody = '${{ github.event.issue.body || "" }}'.replace(/\r?\n/g, ' ').trim();
               return { 
-                body: '${{ github.event.issue.body }}', 
-                number: ${{ github.event.issue.number }}
+                body: issueBody,
+                number: parseInt('${{ github.event.issue.number }}', 10) || 0
               };
             }
           result-encoding: string
@@ -198,9 +200,10 @@ jobs:
             const fs = require('fs');
             const issueNumber = parseInt('${{ steps.process.outputs.issue-number }}', 10);
             const syncOutcome = '${{ steps.sync.outcome }}';
+            const processStatus = '${{ steps.process.outputs.status }}';
             
             // For invalid JSON or failed sync
-            if ('${{ steps.process.outputs.status }}' === 'invalid' || syncOutcome === 'failure') {
+            if (processStatus === 'invalid' || syncOutcome === 'failure') {
               // Add failure label
               await github.rest.issues.addLabels({
                 issue_number: issueNumber,
@@ -220,24 +223,24 @@ jobs:
               }
               
               // Post failure comment
-              const errorMessage = `
-              ## ❌ Image Sync Failed
-              
-              Please check the format of your request and try again.
-              
-              ### Troubleshooting
-              - Make sure your JSON is valid and follows the required format: \`{ "hubsync": ["image1", "image2"] }\`
-              - Check that the Docker images specified exist and are accessible
-              - Verify your credentials have the necessary permissions
-              
-              ### Error Details
-              \`\`\`
-              ${errorLog}
-              \`\`\`
-              
-              ### Need help?
-              Feel free to update this issue with a corrected format.
-              `;
+              const errorMessage = [
+                '## ❌ Image Sync Failed',
+                '',
+                'Please check the format of your request and try again.',
+                '',
+                '### Troubleshooting',
+                '- Make sure your JSON is valid and follows the required format: `{ "hubsync": ["image1", "image2"] }`',
+                '- Check that the Docker images specified exist and are accessible',
+                '- Verify your credentials have the necessary permissions',
+                '',
+                '### Error Details',
+                '```',
+                errorLog,
+                '```',
+                '',
+                '### Need help?',
+                'Feel free to update this issue with a corrected format.'
+              ].join('\n');
               
               await github.rest.issues.createComment({
                 issue_number: issueNumber,
@@ -274,29 +277,35 @@ jobs:
                 
                 // Simplified parsing
                 try {
-                  contentObj = typeof contentRaw === 'object' ? contentRaw : JSON.parse(contentRaw.replace(/^['"]|['"]$/g, ''));
+                  contentObj = JSON.parse(contentRaw.replace(/^["']|["']$/g, ''));
                 } catch (e) {
-                  contentObj = JSON.parse(contentRaw.replace(/\\"/g, '"'));
+                  try {
+                    contentObj = JSON.parse(contentRaw.replace(/\\"/g, '"'));
+                  } catch (e2) {
+                    console.log('Failed to parse content JSON:', e2);
+                    contentObj = { hubsync: [] };
+                  }
                 }
                 
-                if (contentObj?.hubsync?.length) {
-                  imageCount = contentObj.hubsync.length;
-                }
+                imageCount = contentObj && contentObj.hubsync && Array.isArray(contentObj.hubsync) 
+                  ? contentObj.hubsync.length 
+                  : 0;
               } catch (e) {
+                console.log('Error parsing content:', e);
                 imageCount = "some";
               }
               
               // Post success comment
-              const successMessage = `
-              ## ✅ Image Sync Completed Successfully!
-              
-              Successfully synchronized **${imageCount}** Docker image(s).
-              
-              ### Pull Commands
-              \`\`\`bash
-              ${output}
-              \`\`\`
-              `;
+              const successMessage = [
+                '## ✅ Image Sync Completed Successfully!',
+                '',
+                `Successfully synchronized **${imageCount}** Docker image(s).`,
+                '',
+                '### Pull Commands',
+                '```bash',
+                output,
+                '```'
+              ].join('\n');
               
               await github.rest.issues.createComment({
                 issue_number: issueNumber,

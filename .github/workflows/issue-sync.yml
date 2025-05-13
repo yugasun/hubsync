@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       issue_number:
-        description: 'Issue number to process'
+        description: "Issue number to process"
         required: true
         type: string
 
@@ -20,22 +20,22 @@ jobs:
         run: |
           IS_AUTHORIZED="false"
           ISSUE_NUMBER=""
-          
+
           # Check if user is authorized or event is an issue event
           if [ "${{ github.actor }}" == "yugasun" ] || [ "${{ github.event_name }}" == "issues" ]; then
             IS_AUTHORIZED="true"
           fi
-          
+
           # Get issue number based on event type
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             ISSUE_NUMBER="${{ github.event.inputs.issue_number }}"
           else
             ISSUE_NUMBER="${{ github.event.issue.number }}"
           fi
-          
+
           echo "is-authorized=$IS_AUTHORIZED" >> $GITHUB_OUTPUT
           echo "issue-number=$ISSUE_NUMBER" >> $GITHUB_OUTPUT
-      
+
       - name: Post unauthorized message
         if: steps.auth.outputs.is-authorized == 'false'
         uses: actions/github-script@v7
@@ -46,16 +46,16 @@ jobs:
               console.log('Invalid issue number, skipping comment');
               return;
             }
-            
+
             const unauthorizedMessage = `
             ## ⚠️ Unauthorized Workflow Trigger
 
             Hi @${{ github.actor }}, thank you for your interest in HubSync!
 
             This workflow is restricted and can only be triggered by the repository owner (**@yugasun**). 
-            
+
             ### 🛠️ Want to run your own instance of HubSync?
-            
+
             1. **Fork this repository** to your GitHub account
             2. **Set up the following secrets** in your repository settings:
                - \`DOCKER_USERNAME\`: Your Docker Hub username
@@ -63,14 +63,14 @@ jobs:
                - \`DOCKER_NAMESPACE\`: Your Docker Hub namespace (optional)
                - \`DOCKER_REPOSITORY\`: Your Docker Hub repository (optional)
             3. **Enable GitHub Actions** in your forked repository
-            
+
             Then you can use the workflow in your own repository with your credentials!
-            
+
             ### 📝 Need help?
-            
+
             Feel free to open an issue on this repository for assistance.
             `;
-            
+
             await github.rest.issues.createComment({
               issue_number: issueNumber,
               owner: context.repo.owner,
@@ -84,7 +84,7 @@ jobs:
         if: steps.auth.outputs.is-authorized == 'true'
         run: |
           IS_ELIGIBLE="false"
-          
+
           if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
             IS_ELIGIBLE="true"
           elif [ "${{ github.event_name }}" == "issues" ] && 
@@ -92,95 +92,88 @@ jobs:
                  ${{ contains(github.event.issue.title, '[hubsync]') }} ); then
             IS_ELIGIBLE="true"
           fi
-          
+
           echo "is-eligible=$IS_ELIGIBLE" >> $GITHUB_OUTPUT
-      
+
       - name: Checkout code
         if: steps.verify.outputs.is-eligible == 'true'
         uses: actions/checkout@v4
-      
+
       - name: Setup Golang
         if: steps.verify.outputs.is-eligible == 'true'
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
           cache: true
-      
+
       - name: Build HubSync
         if: steps.verify.outputs.is-eligible == 'true'
         run: make build
-      
-      - name: Get issue content
-        id: issue-content
+
+      - name: Extract image list from issue body
         if: steps.verify.outputs.is-eligible == 'true'
+        id: extract
         uses: actions/github-script@v7
         with:
           script: |
-            const issueNumber = parseInt('${{ steps.auth.outputs.issue-number }}', 10);
-            if (isNaN(issueNumber)) {
-              core.setFailed('Invalid issue number');
-              return { body: '', number: 0 };
-            }
+            const issueNumber = ${{ steps.auth.outputs.issue-number }};
+            let issueBody = '';
             
-            // For workflow_dispatch, fetch issue data
+            // Get issue body based on event type
             if ('${{ github.event_name }}' === 'workflow_dispatch') {
+              // For manual workflow dispatch, fetch the issue content
               try {
-                const { data: issue } = await github.rest.issues.get({
+                const issue = await github.rest.issues.get({
                   owner: context.repo.owner,
                   repo: context.repo.repo,
                   issue_number: issueNumber
                 });
-                return { body: issue.body || '', number: issue.number };
+                issueBody = issue.data.body || '';
               } catch (error) {
-                core.setFailed(`Failed to fetch issue: ${error.message}`);
-                return { body: '', number: 0 };
+                core.setFailed(`Error retrieving issue: ${error.message}`);
+                return;
               }
-            } 
-            // For issue events, use the event data directly
-            else {
-              // When using issue event, properly format body as a single line JSON string
-              const issueBody = '${{ github.event.issue.body }}'.replace(/\r?\n/g, ' ').trim() || '';
-              return { 
-                body: issueBody,
-                number: parseInt('${{ github.event.issue.number }}', 10) || 0
-              };
+            } else {
+              // For issue events, use the event payload
+              issueBody = '${{ github.event.issue.body }}' || '';
             }
-          result-encoding: string
-      
-      - name: Process issue body
-        id: process
-        if: steps.verify.outputs.is-eligible == 'true'
-        run: |
-          # Extract issue details
-          ISSUE_BODY='${{ fromJson(steps.issue-content.outputs.result).body }}'
-          ISSUE_NUMBER='${{ fromJson(steps.issue-content.outputs.result).number }}'
-          
-          echo "issue-number=$ISSUE_NUMBER" >> $GITHUB_OUTPUT
-          
-          # Extract and validate JSON content
-          echo "Extracting JSON content from issue body..."
-          CONTENT=$(echo "$ISSUE_BODY" | perl -0777 -ne 'print $& if /\{(?:[^{}]|(?0))*\}/' || echo '')
-          
-          # Handle missing or invalid JSON
-          if [ -z "$CONTENT" ] || ! echo "$CONTENT" | jq . >/dev/null 2>&1 || ! echo "$CONTENT" | jq -e '.hubsync' >/dev/null 2>&1; then
-            echo "content={\"hubsync\":[]}" >> $GITHUB_OUTPUT
-            echo "status=invalid" >> $GITHUB_OUTPUT
-            echo "warning::Invalid or missing JSON content in issue body" >> $GITHUB_STEP_SUMMARY
-            exit 0
-          fi
-          
-          # Valid JSON with hubsync array
-          ESCAPED_CONTENT=$(echo "$CONTENT" | jq -c . | sed 's/%/%25/g' | sed 's/\n/%0A/g' | sed 's/\r/%0D/g')
-          echo "content=$ESCAPED_CONTENT" >> $GITHUB_OUTPUT
-          echo "status=valid" >> $GITHUB_OUTPUT
-          
-          # Preview what will be synced
-          echo "Images to sync:"
-          echo "$CONTENT" | jq -r '.hubsync[]' 2>/dev/null
-      
+            
+            // Try to extract JSON format
+            let content = '';
+            let status = 'invalid';
+            
+            try {
+              // Look for content between curly braces
+              const match = issueBody.match(/{[\s\S]*?}/);
+              if (match) {
+                const jsonContent = match[0];
+                // Validate that it's proper JSON
+                const parsedContent = JSON.parse(jsonContent);
+                
+                // Validate expected format
+                if (parsedContent && Array.isArray(parsedContent.hubsync)) {
+                  content = JSON.stringify(parsedContent);
+                  status = 'valid';
+                } else {
+                  throw new Error('JSON format is invalid; "hubsync" array property is required');
+                }
+              } else {
+                throw new Error('Could not find JSON content in issue body');
+              }
+            } catch (error) {
+              console.log(`Invalid JSON: ${error.message}`);
+              // Default to empty array if invalid
+              content = JSON.stringify({"hubsync":[]});
+            }
+            
+            // Set outputs
+            core.setOutput('content', content);
+            core.setOutput('status', status);
+            core.setOutput('issue-number', issueNumber);
+
       - name: Run HubSync
         id: sync
-        if: steps.verify.outputs.is-eligible == 'true' && steps.process.outputs.status == 'valid'
+        if: steps.verify.outputs.is-eligible == 'true' && steps.extract.outputs.status == 'valid'
         run: |
           echo "Starting Docker Hub synchronization..."
           # Using echo directly without temp file improves performance
@@ -189,19 +182,19 @@ jobs:
             --password=${{ secrets.DOCKER_PASSWORD }} \
             --repository=${{ secrets.DOCKER_REPOSITORY || '' }} \
             --namespace=${{ secrets.DOCKER_NAMESPACE || 'yugasun' }} \
-            --content='${{ steps.process.outputs.content }}'
+            --content='${{ steps.extract.outputs.content }}'
         continue-on-error: true
-      
+
       - name: Post issue update
         if: steps.verify.outputs.is-eligible == 'true'
         uses: actions/github-script@v7
         with:
           script: |
             const fs = require('fs');
-            const issueNumber = parseInt('${{ steps.process.outputs.issue-number }}', 10);
+            const issueNumber = parseInt('${{ steps.extract.outputs.issue-number }}', 10);
             const syncOutcome = '${{ steps.sync.outcome }}';
-            const processStatus = '${{ steps.process.outputs.status }}';
-            
+            const processStatus = '${{ steps.extract.outputs.status }}';
+
             // For invalid JSON or failed sync
             if (processStatus === 'invalid' || syncOutcome === 'failure') {
               // Add failure label
@@ -272,21 +265,8 @@ jobs:
               // Get image count safely
               let imageCount = 0;
               try {
-                const contentRaw = '${{ steps.process.outputs.content }}';
-                let contentObj;
-                
-                // Simplified parsing
-                try {
-                  contentObj = JSON.parse(contentRaw.replace(/^["']|["']$/g, ''));
-                } catch (e) {
-                  try {
-                    contentObj = JSON.parse(contentRaw.replace(/\\"/g, '"'));
-                  } catch (e2) {
-                    console.log('Failed to parse content JSON:', e2);
-                    contentObj = { hubsync: [] };
-                  }
-                }
-                
+                const contentRaw = '${{ steps.extract.outputs.content }}';
+                const contentObj = JSON.parse(contentRaw);
                 imageCount = contentObj && contentObj.hubsync && Array.isArray(contentObj.hubsync) 
                   ? contentObj.hubsync.length 
                   : 0;

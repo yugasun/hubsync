@@ -139,7 +139,7 @@ jobs:
             // For issue events, use the event data directly
             else {
               // When using issue event, properly format body as a single line JSON string
-              const issueBody = '${{ github.event.issue.body || "" }}'.replace(/\r?\n/g, ' ').trim();
+              const issueBody = '${{ github.event.issue.body }}'.replace(/\r?\n/g, ' ').trim() || '';
               return { 
                 body: issueBody,
                 number: parseInt('${{ github.event.issue.number }}', 10) || 0
@@ -295,7 +295,7 @@ jobs:
                 imageCount = "some";
               }
               
-              // Post success comment
+              // Post success message
               const successMessage = [
                 '## ✅ Image Sync Completed Successfully!',
                 '',

@@ -4,7 +4,7 @@ on:
   workflow_call:
     inputs:
       version:
-        description: 'Version to publish'
+        description: "Version to publish"
         required: true
         type: string
 
@@ -20,25 +20,25 @@ jobs:
         with:
           fetch-depth: 0
           ref: ${{ inputs.version }}
-        
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
           pattern: hubsync-*
           path: dist
           merge-multiple: true
-      
+
       - name: Prepare release assets
         run: |
           mkdir -p release_assets
-          
+
           # Debug downloaded files
           echo "=== Contents of dist directory ==="
           find dist -type f | sort
-          
+
           # Copy all binary assets to release_assets directory
           find dist -type f -name "hubsync-*" | xargs -I{} cp {} release_assets/
-          
+
           # Create convenience symlinks for install script compatibility
           for os in linux darwin windows; do
             for arch in amd64 arm64; do
@@ -66,18 +66,18 @@ jobs:
               fi
             done
           done
-          
+
           echo "=== Final release assets ==="
           ls -la release_assets/
-      
+
       - name: Generate release notes
         run: |
           VERSION="${{ inputs.version }}"
-          
+
           echo "## HubSync Release ${VERSION}" > release_notes.md
           echo "" >> release_notes.md
           echo "### Changes" >> release_notes.md
-          
+
           # Generate changelog
           PREV_TAG=$(git describe --tags --abbrev=0 ${VERSION}^ 2>/dev/null || echo "")
           if [ -n "$PREV_TAG" ]; then
@@ -87,36 +87,36 @@ jobs:
             echo "No previous tag found, using full history"
             git log ${VERSION} --pretty=format:"- %s" --no-merges >> release_notes.md
           fi
-          
+
           echo "" >> release_notes.md
           echo "### Installation" >> release_notes.md
           echo '```bash' >> release_notes.md
           echo 'curl -fsSL https://raw.githubusercontent.com/yugasun/hubsync/refs/heads/main/install.sh | bash' >> release_notes.md
           echo '```' >> release_notes.md
-          
+
           cat << EOF >> release_notes.md
 
-### Available Binaries
+          ### Available Binaries
 
-Platform | Architecture | Download Link | SHA256
----------|--------------|---------------|-------
-Linux | amd64 | [hubsync-linux-amd64](https://github.com/yugasun/hubsync/releases/download/${VERSION}/hubsync-linux-amd64) | \`$(cat release_assets/hubsync-linux-amd64.sha256 | cut -d ' ' -f1)\`
-Linux | arm64 | [hubsync-linux-arm64](https://github.com/yugasun/hubsync/releases/download/${VERSION}/hubsync-linux-arm64) | \`$(cat release_assets/hubsync-linux-arm64.sha256 | cut -d ' ' -f1)\`
-macOS | amd64 | [hubsync-darwin-amd64](https://github.com/yugasun/hubsync/releases/download/${VERSION}/hubsync-darwin-amd64) | \`$(cat release_assets/hubsync-darwin-amd64.sha256 | cut -d ' ' -f1)\`
-macOS | arm64 | [hubsync-darwin-arm64](https://github.com/yugasun/hubsync/releases/download/${VERSION}/hubsync-darwin-arm64) | \`$(cat release_assets/hubsync-darwin-arm64.sha256 | cut -d ' ' -f1)\`
-Windows | amd64 | [hubsync-windows-amd64.exe](https://github.com/yugasun/hubsync/releases/download/${VERSION}/hubsync-windows-amd64.exe) | \`$(cat release_assets/hubsync-windows-amd64.exe.sha256 | cut -d ' ' -f1)\`
+          Platform | Architecture | Download Link | SHA256
+          ---------|--------------|---------------|-------
+          Linux | amd64 | [hubsync-linux-amd64](https://github.com/yugasun/hubsync/releases/download/${VERSION}/hubsync-linux-amd64) | \`$(cat release_assets/hubsync-linux-amd64.sha256 | cut -d ' ' -f1)\`
+          Linux | arm64 | [hubsync-linux-arm64](https://github.com/yugasun/hubsync/releases/download/${VERSION}/hubsync-linux-arm64) | \`$(cat release_assets/hubsync-linux-arm64.sha256 | cut -d ' ' -f1)\`
+          macOS | amd64 | [hubsync-darwin-amd64](https://github.com/yugasun/hubsync/releases/download/${VERSION}/hubsync-darwin-amd64) | \`$(cat release_assets/hubsync-darwin-amd64.sha256 | cut -d ' ' -f1)\`
+          macOS | arm64 | [hubsync-darwin-arm64](https://github.com/yugasun/hubsync/releases/download/${VERSION}/hubsync-darwin-arm64) | \`$(cat release_assets/hubsync-darwin-arm64.sha256 | cut -d ' ' -f1)\`
+          Windows | amd64 | [hubsync-windows-amd64.exe](https://github.com/yugasun/hubsync/releases/download/${VERSION}/hubsync-windows-amd64.exe) | \`$(cat release_assets/hubsync-windows-amd64.exe.sha256 | cut -d ' ' -f1)\`
 
-### Docker
-\`\`\`bash
-docker pull yugasun/hubsync:${VERSION#v}
-\`\`\`
+          ### Docker
+          \`\`\`bash
+          docker pull yugasun/hubsync:${VERSION#v}
+          \`\`\`
 
-### Homebrew
-\`\`\`bash
-brew install yugasun/tap/hubsync
-\`\`\`
-EOF
-      
+          ### Homebrew
+          \`\`\`bash
+          brew install yugasun/tap/hubsync
+          \`\`\`
+          EOF
+
       - name: Create Release
         uses: softprops/action-gh-release@v2
         with:

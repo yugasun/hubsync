@@ -1,7 +1,7 @@
 class Hubsync < Formula
   desc "Docker Hub Image Synchronization Tool"
   homepage "https://github.com/yugasun/hubsync"
-  version "0.2.0"
+  version "0.2.1"
   license "MIT"
 
   if OS.mac?

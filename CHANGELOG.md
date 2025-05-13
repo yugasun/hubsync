@@ -1,3 +1,10 @@
+## [0.2.3](https://github.com/yugasun/hubsync/compare/v0.2.2...v0.2.3) (2025-05-13)
+
+
+### Bug Fixes
+
+* add builddate for main ([8087b93](https://github.com/yugasun/hubsync/commit/8087b930dfddd8126ebf26da9fa00b719f9cc295))
+
 ## [0.2.2](https://github.com/yugasun/hubsync/compare/v0.2.1...v0.2.2) (2025-05-13)
 
 

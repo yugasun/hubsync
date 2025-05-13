@@ -15,6 +15,16 @@ on:
         description: "Version to build (with v prefix, e.g., v1.2.3)"
         required: false
         type: string
+  workflow_call:
+    inputs:
+      version:
+        description: "Version to build (with v prefix, e.g., v1.2.3)"
+        required: true
+        type: string
+    outputs:
+      artifacts_created:
+        description: "Whether artifacts were successfully created"
+        value: ${{ jobs.build.outputs.artifacts_created }}
 
 jobs:
   build:

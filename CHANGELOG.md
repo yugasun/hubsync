@@ -1,3 +1,10 @@
+## [0.2.4](https://github.com/yugasun/hubsync/compare/v0.2.3...v0.2.4) (2025-05-13)
+
+
+### Bug Fixes
+
+* update tap error ([1b5db34](https://github.com/yugasun/hubsync/commit/1b5db3431c854277f008d65c2fab256f4aa1852b))
+
 ## [0.2.3](https://github.com/yugasun/hubsync/compare/v0.2.2...v0.2.3) (2025-05-13)
 
 

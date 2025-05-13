@@ -61,9 +61,7 @@ func (c *Container) Initialize(cfg *config.Config) error {
 		return err
 	}
 
-	if err := c.initializeRegistryClient(); err != nil {
-		return err
-	}
+	c.initializeRegistryClient()
 
 	// Initialize syncer
 	c.syncer = sync.NewSyncerV2(c.config, c.dockerClient, c.registryClient)
@@ -128,7 +126,7 @@ func (c *Container) initializeDockerClient() error {
 }
 
 // initializeRegistryClient initializes the registry client
-func (c *Container) initializeRegistryClient() error {
+func (c *Container) initializeRegistryClient() {
 	// Create registry configuration
 	registryConfig := registry.RegistryConfig{
 		Provider:   registry.DockerHub, // Default to Docker Hub
@@ -139,17 +137,13 @@ func (c *Container) initializeRegistryClient() error {
 	}
 
 	// Create appropriate registry client based on configuration
-	var registryClient registry.RegistryInterface
-
 	// For now, only Docker Hub is supported
 	// In the future, we can add more registry types based on URL or configuration
-	registryClient = registry.NewDockerHubRegistry(registryConfig)
+	registryClient := registry.NewDockerHubRegistry(registryConfig)
 
 	c.registryClient = registryClient
-	return nil
 }
 
-// GetConfig returns the configuration
 func (c *Container) GetConfig() *config.Config {
 	c.mutex.Lock()
 	defer c.mutex.Unlock()

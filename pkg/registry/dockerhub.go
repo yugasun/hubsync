@@ -88,12 +88,16 @@ func (r *DockerHubRegistry) Auth(ctx context.Context) error {
 		defer resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
-			body, _ := io.ReadAll(resp.Body)
-			return errors.NewAuthError(
-				"registry",
-				fmt.Sprintf("authentication failed with status %d: %s", resp.StatusCode, string(body)),
-				nil,
-			)
+			body, err := io.ReadAll(resp.Body)
+			errMsg := fmt.Sprintf("authentication failed with status %d", resp.StatusCode)
+			if err == nil {
+				errMsg += fmt.Sprintf(": %s", string(body))
+			} else {
+				log.Warn().Err(err).Msg("Failed to read error response body")
+				// Still include the status code even if we couldn't read the body
+				errMsg += fmt.Sprintf(" (could not read response body: %v)", err)
+			}
+			return errors.NewAuthError("registry", errMsg, nil)
 		}
 
 		if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
@@ -130,11 +134,16 @@ func (r *DockerHubRegistry) Auth(ctx context.Context) error {
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return errors.NewAuthError(
-			"registry",
-			fmt.Sprintf("anonymous authentication failed with status %d", resp.StatusCode),
-			nil,
-		)
+		body, err := io.ReadAll(resp.Body)
+		errMsg := fmt.Sprintf("anonymous authentication failed with status %d", resp.StatusCode)
+		if err == nil {
+			errMsg += fmt.Sprintf(": %s", string(body))
+		} else {
+			log.Warn().Err(err).Msg("Failed to read error response body")
+			// Still include the status code even if we couldn't read the body
+			errMsg += fmt.Sprintf(" (could not read response body: %v)", err)
+		}
+		return errors.NewAuthError("registry", errMsg, nil)
 	}
 
 	if err := json.NewDecoder(resp.Body).Decode(&authResp); err != nil {
@@ -186,12 +195,16 @@ func (r *DockerHubRegistry) ListImages(ctx context.Context, namespace string) ([
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, errors.NewOperationError(
-			"registry",
-			fmt.Sprintf("failed to list images with status %d: %s", resp.StatusCode, string(body)),
-			nil,
-		)
+		body, err := io.ReadAll(resp.Body)
+		errMsg := fmt.Sprintf("failed to list images with status %d", resp.StatusCode)
+		if err == nil {
+			errMsg += fmt.Sprintf(": %s", string(body))
+		} else {
+			log.Warn().Err(err).Msg("Failed to read error response body")
+			// Still include the status code even if we couldn't read the body
+			errMsg += fmt.Sprintf(" (could not read response body: %v)", err)
+		}
+		return nil, errors.NewOperationError("registry", errMsg, nil)
 	}
 
 	var response struct {
@@ -234,12 +247,16 @@ func (r *DockerHubRegistry) GetImageTags(ctx context.Context, repository string)
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, errors.NewOperationError(
-			"registry",
-			fmt.Sprintf("failed to get image tags with status %d: %s", resp.StatusCode, string(body)),
-			nil,
-		)
+		body, err := io.ReadAll(resp.Body)
+		errMsg := fmt.Sprintf("failed to get image tags with status %d", resp.StatusCode)
+		if err == nil {
+			errMsg += fmt.Sprintf(": %s", string(body))
+		} else {
+			log.Warn().Err(err).Msg("Failed to read error response body")
+			// Still include the status code even if we couldn't read the body
+			errMsg += fmt.Sprintf(" (could not read response body: %v)", err)
+		}
+		return nil, errors.NewOperationError("registry", errMsg, nil)
 	}
 
 	var response struct {
@@ -289,15 +306,23 @@ func (r *DockerHubRegistry) GetImageManifest(ctx context.Context, repository str
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(resp.Body)
-		return nil, errors.NewOperationError(
-			"registry",
-			fmt.Sprintf("failed to get manifest with status %d: %s", resp.StatusCode, string(body)),
-			nil,
-		)
+		body, err := io.ReadAll(resp.Body)
+		errMsg := fmt.Sprintf("failed to get manifest with status %d", resp.StatusCode)
+		if err == nil {
+			errMsg += fmt.Sprintf(": %s", string(body))
+		} else {
+			log.Warn().Err(err).Msg("Failed to read error response body")
+			// Still include the status code even if we couldn't read the body
+			errMsg += fmt.Sprintf(" (could not read response body: %v)", err)
+		}
+		return nil, errors.NewOperationError("registry", errMsg, nil)
 	}
 
-	return io.ReadAll(resp.Body)
+	manifest, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, errors.NewIOError("registry", "failed to read manifest response", err)
+	}
+	return manifest, nil
 }
 
 // ValidateImage checks if an image exists in the registry

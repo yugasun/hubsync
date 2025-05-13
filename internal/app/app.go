@@ -52,7 +52,11 @@ func Run(version string) error {
 	if err := container.Initialize(cfg); err != nil {
 		return errors.NewSystemError("app", "failed to initialize application container", err)
 	}
-	defer container.Cleanup()
+	defer func() {
+		if cleanupErr := container.Cleanup(); cleanupErr != nil {
+			log.Error().Err(cleanupErr).Msg("Error during container cleanup")
+		}
+	}()
 
 	// Create syncer with timeout
 	syncerCtx, syncerCancel := context.WithTimeout(ctx, cfg.Timeout)

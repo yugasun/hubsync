@@ -116,7 +116,7 @@ func (s *ParallelStrategy) Execute(ctx context.Context, operations []*SyncOperat
 	}()
 
 	// Collect results
-	var results []*SyncResult
+	results := make([]*SyncResult, 0, len(operations))
 	successCount := 0
 	failureCount := 0
 

@@ -5,10 +5,21 @@ import (
 	"fmt"
 	"os"
 	"runtime"
+	"strings"
 	"time"
 
 	"github.com/rs/zerolog"
 	"github.com/rs/zerolog/log"
+	"github.com/urfave/cli/v2"
+)
+
+// Custom context key types to avoid collisions
+type contextKey string
+
+const (
+	correlationIDKey  contextKey = "correlation_id"
+	operationNameKey  contextKey = "operation_name"
+	operationStartKey contextKey = "operation_start"
 )
 
 // TelemetryManager handles telemetry for the application
@@ -71,13 +82,13 @@ func (t *TelemetryManager) Start(ctx context.Context, operationName string, corr
 	// Store correlation ID
 	t.correlationIDs[operationName] = correlationID
 
-	// Add correlation ID to context
-	ctx = context.WithValue(ctx, "correlation_id", correlationID)
-	ctx = context.WithValue(ctx, "operation_name", operationName)
-	ctx = context.WithValue(ctx, "operation_start", time.Now())
+	// Add operation details to context
+	ctx = context.WithValue(ctx, correlationIDKey, correlationID)
+	ctx = context.WithValue(ctx, operationNameKey, operationName)
+	ctx = context.WithValue(ctx, operationStartKey, time.Now())
 
 	// Log operation start
-	log.Debug().
+	log.Ctx(ctx).Debug().
 		Str("correlation_id", correlationID).
 		Str("operation", operationName).
 		Str("service", t.serviceName).
@@ -93,28 +104,26 @@ func (t *TelemetryManager) End(ctx context.Context, err error) {
 		return
 	}
 
-	// Extract context values
-	correlationID, _ := ctx.Value("correlation_id").(string)
-	operationName, _ := ctx.Value("operation_name").(string)
-	startTime, _ := ctx.Value("operation_start").(time.Time)
+	// Extract operation details from context
+	correlationID, _ := ctx.Value(correlationIDKey).(string)
+	operationName, _ := ctx.Value(operationNameKey).(string)
+	startTime, _ := ctx.Value(operationStartKey).(time.Time)
 
 	// Calculate duration
 	duration := time.Since(startTime)
 
+	// Create logger event
+	event := log.Ctx(ctx).Info()
 	if err != nil {
-		log.Error().
-			Str("correlation_id", correlationID).
-			Str("operation", operationName).
-			Dur("duration_ms", duration).
-			Err(err).
-			Msg("Operation failed")
-	} else {
-		log.Debug().
-			Str("correlation_id", correlationID).
-			Str("operation", operationName).
-			Dur("duration_ms", duration).
-			Msg("Operation completed successfully")
+		event = log.Ctx(ctx).Error().Err(err)
 	}
+
+	// Add operation details
+	event.
+		Str("correlation_id", correlationID).
+		Str("operation", operationName).
+		Dur("duration", duration).
+		Msg("Operation completed")
 }
 
 // RecordEvent records a telemetry event
@@ -124,8 +133,12 @@ func (t *TelemetryManager) RecordEvent(ctx context.Context, eventName string, pr
 	}
 
 	// Extract context values
-	correlationID, _ := ctx.Value("correlation_id").(string)
-	operationName, _ := ctx.Value("operation_name").(string)
+	correlationID, ok1 := ctx.Value(correlationIDKey).(string)
+	operationName, ok2 := ctx.Value(operationNameKey).(string)
+
+	if !ok1 || !ok2 {
+		log.Warn().Str("event", eventName).Msg("Missing context values for telemetry event")
+	}
 
 	// Start with a logger containing common fields
 	logger := log.Info().
@@ -151,8 +164,15 @@ func (t *TelemetryManager) RecordDependency(ctx context.Context, dependencyType,
 	}
 
 	// Extract context values
-	correlationID, _ := ctx.Value("correlation_id").(string)
-	operationName, _ := ctx.Value("operation_name").(string)
+	correlationID, ok1 := ctx.Value(correlationIDKey).(string)
+	operationName, ok2 := ctx.Value(operationNameKey).(string)
+
+	if !ok1 || !ok2 {
+		log.Warn().
+			Str("dependency_type", dependencyType).
+			Str("dependency_name", dependencyName).
+			Msg("Missing context values for dependency call")
+	}
 
 	// Calculate duration
 	duration := time.Since(startTime)
@@ -187,7 +207,11 @@ func (t *TelemetryManager) RecordMetric(ctx context.Context, name string, value 
 	}
 
 	// Extract context values
-	correlationID, _ := ctx.Value("correlation_id").(string)
+	correlationID, ok := ctx.Value(correlationIDKey).(string)
+	if !ok {
+		log.Warn().Str("metric", name).Msg("Missing correlation ID for metric")
+		correlationID = "unknown"
+	}
 
 	// Build logger with common fields
 	logger := log.Debug().
@@ -202,28 +226,6 @@ func (t *TelemetryManager) RecordMetric(ctx context.Context, name string, value 
 
 	// Log the metric
 	logger.Msg("Metric recorded")
-}
-
-// Helper function to add a field to the logger based on value type
-func addFieldToLogger(logger zerolog.Context, key string, value interface{}) zerolog.Context {
-	switch v := value.(type) {
-	case string:
-		return logger.Str(key, v)
-	case int:
-		return logger.Int(key, v)
-	case int64:
-		return logger.Int64(key, v)
-	case float64:
-		return logger.Float64(key, v)
-	case bool:
-		return logger.Bool(key, v)
-	case time.Time:
-		return logger.Time(key, v)
-	case time.Duration:
-		return logger.Dur(key, v)
-	default:
-		return logger.Interface(key, v)
-	}
 }
 
 // Helper function to add a field to an event logger based on value type
@@ -281,4 +283,45 @@ func (t *TelemetryManager) LogApplicationInfo() {
 		Int("cpu_count", t.hostInfo.CPUCount).
 		Str("go_version", t.hostInfo.GoVersion).
 		Msg("Application started")
+}
+
+// LogCliCommand logs a CLI command execution
+func (t *TelemetryManager) LogCliCommand(c *cli.Context) {
+	if !t.enabled {
+		return
+	}
+
+	// Convert arguments to string by joining them
+	argsStr := strings.Join(c.Args().Slice(), " ")
+
+	log.Info().
+		Str("command", c.Command.Name).
+		Str("args", argsStr).
+		Msg("CLI command executed")
+}
+
+// GenerateID generates a unique identifier for operations
+func GenerateID() string {
+	return time.Now().Format("20060102-150405-000000")
+}
+
+// GetCorrelationID retrieves the correlation ID from context
+func GetCorrelationID(ctx context.Context) string {
+	id, _ := ctx.Value(correlationIDKey).(string)
+	return id
+}
+
+// GetCorrelationIDKey returns the context key for correlation ID
+func GetCorrelationIDKey() contextKey {
+	return correlationIDKey
+}
+
+// GetOperationNameKey returns the context key for operation name
+func GetOperationNameKey() contextKey {
+	return operationNameKey
+}
+
+// GetOperationStartKey returns the context key for operation start time
+func GetOperationStartKey() contextKey {
+	return operationStartKey
 }

@@ -1,4 +1,4 @@
-.PHONY: build run test integration-test clean lint vet cover help all
+.PHONY: build run test integration-test clean lint vet cover help all lint-install lint-fix lint-ci
 
 BINARY_NAME=hubsync
 VERSION=$(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
@@ -31,6 +31,9 @@ help:
 	@echo "  make cross         Build for all supported platforms"
 	@echo "  make clean         Remove build artifacts"
 	@echo "  make lint          Run linters"
+	@echo "  make lint-fix      Run linters and fix issues automatically"
+	@echo "  make lint-ci       Run linters in CI mode (strict)"
+	@echo "  make lint-install  Install linting tools"
 	@echo "  make vet           Run go vet"
 	@echo "  make cover         Run tests with coverage"
 	@echo "  make all           Clean, lint, test, and build"
@@ -98,10 +101,35 @@ clean:
 	rm -rf $(BUILD_DIR)
 	go clean
 
-lint:
+lint-install:
+	@echo "Installing linting tools..."
+	@if command -v golangci-lint >/dev/null 2>&1; then \
+		echo "golangci-lint already installed"; \
+	elif command -v brew >/dev/null 2>&1; then \
+		echo "Installing golangci-lint via Homebrew..."; \
+		brew install golangci-lint; \
+	elif [ "$(shell uname)" = "Darwin" ]; then \
+		echo "macOS detected. You can install golangci-lint via:"; \
+		echo "  brew install golangci-lint"; \
+		echo "or manually download from https://github.com/golangci/golangci-lint/releases"; \
+		exit 1; \
+	else \
+		echo "Installing golangci-lint..."; \
+		go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; \
+	fi
+	@echo "Linting tools installed successfully!"
+
+lint: lint-install
 	@echo "Running linters..."
-	@command -v golangci-lint >/dev/null 2>&1 || { echo "Installing golangci-lint..."; go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest; }
-	golangci-lint run ./...
+	golangci-lint run --timeout=5m ./...
+
+lint-fix: lint-install
+	@echo "Running linters with auto-fix..."
+	golangci-lint run --fix ./...
+
+lint-ci: lint-install
+	@echo "Running linters in CI mode (strict)..."
+	golangci-lint run --timeout=5m --out-format=github-actions ./... || exit 1
 
 vet:
 	@echo "Running go vet..."

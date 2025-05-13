@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"strings"
-	"sync"
 	"text/template"
 	"time"
 
@@ -15,6 +14,7 @@ import (
 	"github.com/yugasun/hubsync/internal/config"
 	"github.com/yugasun/hubsync/pkg/docker"
 	"github.com/yugasun/hubsync/pkg/errors"
+	"github.com/yugasun/hubsync/pkg/observability"
 	"github.com/yugasun/hubsync/pkg/registry"
 	"github.com/yugasun/hubsync/pkg/sync/strategies"
 )
@@ -37,7 +37,6 @@ type SyncerV2 struct {
 	strategyFactory  *strategies.StrategyFactory
 	operations       []*strategies.SyncOperation
 	results          []*strategies.SyncResult
-	mutex            sync.Mutex
 	processedCount   int
 	statistics       *SyncStatisticsV2
 	telemetryEnabled bool
@@ -76,8 +75,13 @@ func NewSyncerV2(
 func (s *SyncerV2) Run(ctx context.Context) error {
 	startTime := time.Now()
 
-	// Add correlation ID to context for tracing
-	ctx = context.WithValue(ctx, "correlation_id", s.correlationID)
+	// Initialize context if not already initialized
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	// Add correlation ID to the context for tracing
+	ctx = context.WithValue(ctx, observability.GetCorrelationIDKey(), s.correlationID)
 
 	// Parse content to get image list
 	images, err := s.parseContent()

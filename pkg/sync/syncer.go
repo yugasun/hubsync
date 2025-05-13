@@ -74,7 +74,16 @@ func (s *Syncer) Run(ctx context.Context) error {
 
 	// Initialize statistics
 	s.stats.TotalImages = len(images)
-	atomic.StoreInt32(&s.totalCount, int32(len(images)))
+
+	// Fix for G115: integer overflow conversion int -> int32
+	// Safely convert len(images) to int32, capping at max int32 if needed
+	imageCount := len(images)
+	if imageCount > (1<<31 - 1) {
+		log.Warn().Msg("Number of images exceeds maximum value for int32, count may be inaccurate")
+		atomic.StoreInt32(&s.totalCount, (1<<31)-1)
+	} else {
+		atomic.StoreInt32(&s.totalCount, int32(imageCount))
+	}
 
 	log.Info().
 		Int("total_images", len(images)).

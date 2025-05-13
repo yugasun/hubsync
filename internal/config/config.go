@@ -118,8 +118,10 @@ func ParseConfig() (*Config, error) {
 	pflag.BoolVar(&cfg.MetricsEnabled, "metrics", getBoolEnv("METRICS_ENABLED", cfg.MetricsEnabled), "Enable metrics collection")
 
 	// Help and version
-	help := pflag.BoolP("help", "h", false, "Show this help message")
-	version := pflag.BoolP("version", "v", false, "Show version information")
+	var (
+		help    = pflag.BoolP("help", "h", false, "Show this help message")
+		version = pflag.BoolP("version", "v", false, "Show version information")
+	)
 
 	// Parse flags
 	pflag.Parse()
@@ -323,17 +325,27 @@ func (c *Config) SaveToFile(filePath string) error {
 		return errors.NewConfigError("config", fmt.Sprintf("unsupported config file format: %s", ext), nil)
 	}
 
-	return os.WriteFile(filePath, data, 0o644)
+	return os.WriteFile(filePath, data, 0o600)
 }
 
 // Helper to convert struct to map
 func structToMap(obj interface{}) map[string]interface{} {
 	// Convert to JSON
-	jsonData, _ := json.Marshal(obj)
+	jsonData, err := json.Marshal(obj)
+	if err != nil {
+		// This shouldn't fail since we're converting from a valid struct
+		// But log and return empty map just in case
+		log.Warn().Err(err).Msg("Failed to marshal struct to JSON")
+		return make(map[string]interface{})
+	}
 
 	// Convert JSON to map
 	var result map[string]interface{}
-	json.Unmarshal(jsonData, &result)
+	if err := json.Unmarshal(jsonData, &result); err != nil {
+		// This shouldn't fail since we're converting from a valid JSON
+		// But log a warning just in case
+		log.Warn().Err(err).Msg("Failed to unmarshal struct to map")
+	}
 
 	return result
 }

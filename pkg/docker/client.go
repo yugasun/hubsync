@@ -75,9 +75,11 @@ func (c *Client) VerifyCredentials(ctx context.Context) error {
 	return nil
 }
 
-// PullImage pulls a Docker image with retry logic
-func (c *Client) PullImage(ctx context.Context, imageName string) error {
-	log.Debug().Str("image", imageName).Msg("Pulling image")
+// PerformWithRetry performs an operation with retry logic
+func (c *Client) performWithRetry(ctx context.Context, imageName, operationType string, timeout time.Duration,
+	operation func(opCtx context.Context) (io.ReadCloser, error),
+) error {
+	log.Debug().Str("image", imageName).Msgf("%sing image", operationType)
 
 	var lastErr error
 	for attempt := 0; attempt <= c.Config.RetryCount; attempt++ {
@@ -85,29 +87,37 @@ func (c *Client) PullImage(ctx context.Context, imageName string) error {
 			log.Debug().
 				Int("attempt", attempt).
 				Str("image", imageName).
-				Msg("Retrying pull operation")
+				Msgf("Retrying %s operation", operationType)
 
 			// Wait before retrying with exponential backoff
-			backoffDelay := time.Duration(1<<uint(attempt-1)) * c.Config.RetryDelay
+			// Fix for G115: integer overflow conversion int -> uint
+			// Calculate backoff delay safely to avoid integer overflow
+			var backoffDelay time.Duration
+			if attempt > 30 {
+				// Avoid overflow by capping at a maximum exponent value
+				// 2^30 is already a large number for backoff calculation
+				backoffDelay = time.Duration(1<<30) * c.Config.RetryDelay
+			} else {
+				backoffDelay = time.Duration(1<<attempt) * c.Config.RetryDelay / 2
+			}
+
 			select {
 			case <-time.After(backoffDelay):
 			case <-ctx.Done():
-				return errors.NewContextError("docker", "context cancelled during pull retry wait", ctx.Err())
+				return errors.NewContextError("docker", fmt.Sprintf("context cancelled during %s retry wait", operationType), ctx.Err())
 			}
 		}
 
-		// Add timeout for the pull operation
-		pullCtx, cancel := context.WithTimeout(ctx, c.Config.PullTimeout)
-		pullOut, err := c.DockerClient.ImagePull(pullCtx, imageName, image.PullOptions{
-			RegistryAuth: c.AuthStr,
-		})
+		// Add timeout for the operation
+		opCtx, cancel := context.WithTimeout(ctx, timeout)
+		output, err := operation(opCtx)
 
 		if err == nil {
-			defer pullOut.Close()
-			// We need to read the output to completion or the pull may hang
-			if _, err := io.Copy(io.Discard, pullOut); err != nil {
+			defer output.Close()
+			// We need to read the output to completion or the operation may hang
+			if _, err := io.Copy(io.Discard, output); err != nil {
 				cancel()
-				return errors.NewIOError("docker", "error reading pull output", err)
+				return errors.NewIOError("docker", fmt.Sprintf("error reading %s output", operationType), err)
 			}
 			cancel()
 			return nil
@@ -115,14 +125,22 @@ func (c *Client) PullImage(ctx context.Context, imageName string) error {
 
 		cancel()
 		lastErr = err
-		log.Warn().Err(err).Str("image", imageName).Int("attempt", attempt+1).Msg("Pull attempt failed")
+		log.Warn().Err(err).Str("image", imageName).Int("attempt", attempt+1).Msgf("%s attempt failed", operationType)
 	}
 
 	return errors.NewOperationError(
 		"docker",
-		fmt.Sprintf("failed to pull image after %d attempts", c.Config.RetryCount+1),
+		fmt.Sprintf("failed to %s image after %d attempts", operationType, c.Config.RetryCount+1),
 		lastErr,
 	)
+}
+
+// PullImage pulls a Docker image with retry logic
+func (c *Client) PullImage(ctx context.Context, imageName string) error {
+	return c.performWithRetry(ctx, imageName, "Pull", c.Config.PullTimeout, func(opCtx context.Context) (io.ReadCloser, error) {
+		// DO NOT add auth config to the pull options
+		return c.DockerClient.ImagePull(opCtx, imageName, image.PullOptions{})
+	})
 }
 
 // TagImage tags a Docker image
@@ -137,52 +155,11 @@ func (c *Client) TagImage(ctx context.Context, source, target string) error {
 
 // PushImage pushes a Docker image with retry logic
 func (c *Client) PushImage(ctx context.Context, imageName string) error {
-	log.Debug().Str("image", imageName).Msg("Pushing image")
-
-	var lastErr error
-	for attempt := 0; attempt <= c.Config.RetryCount; attempt++ {
-		if attempt > 0 {
-			log.Debug().
-				Int("attempt", attempt).
-				Str("image", imageName).
-				Msg("Retrying push operation")
-
-			// Wait before retrying with exponential backoff
-			backoffDelay := time.Duration(1<<uint(attempt-1)) * c.Config.RetryDelay
-			select {
-			case <-time.After(backoffDelay):
-			case <-ctx.Done():
-				return errors.NewContextError("docker", "context cancelled during push retry wait", ctx.Err())
-			}
-		}
-
-		// Add timeout for the push operation
-		pushCtx, cancel := context.WithTimeout(ctx, c.Config.PushTimeout)
-		pushOut, err := c.DockerClient.ImagePush(pushCtx, imageName, image.PushOptions{
+	return c.performWithRetry(ctx, imageName, "Push", c.Config.PushTimeout, func(opCtx context.Context) (io.ReadCloser, error) {
+		return c.DockerClient.ImagePush(opCtx, imageName, image.PushOptions{
 			RegistryAuth: c.AuthStr,
 		})
-
-		if err == nil {
-			defer pushOut.Close()
-			// We need to read the output to completion or the push may hang
-			if _, err := io.Copy(io.Discard, pushOut); err != nil {
-				cancel()
-				return errors.NewIOError("docker", "error reading push output", err)
-			}
-			cancel()
-			return nil
-		}
-
-		cancel()
-		lastErr = err
-		log.Warn().Err(err).Str("image", imageName).Int("attempt", attempt+1).Msg("Push attempt failed")
-	}
-
-	return errors.NewOperationError(
-		"docker",
-		fmt.Sprintf("failed to push image after %d attempts", c.Config.RetryCount+1),
-		lastErr,
-	)
+	})
 }
 
 // GetImageInfo retrieves information about a Docker image
@@ -197,7 +174,10 @@ func (c *Client) GetImageInfo(ctx context.Context, imageName string) (*ImageRefe
 // Close closes the Docker client
 func (c *Client) Close() error {
 	if c.DockerClient != nil {
-		return c.DockerClient.Close()
+		err := c.DockerClient.Close()
+		if err != nil {
+			return fmt.Errorf("error closing Docker client: %w", err)
+		}
 	}
 	return nil
 }

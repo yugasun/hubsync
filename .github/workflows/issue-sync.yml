@@ -17,24 +17,30 @@ jobs:
     steps:
       - name: Check authorization
         id: auth
-        run: |
-          IS_AUTHORIZED="false"
-          ISSUE_NUMBER=""
-
-          # Check if user is authorized or event is an issue event
-          if [ "${{ github.actor }}" == "yugasun" ] || [ "${{ github.event_name }}" == "issues" ]; then
-            IS_AUTHORIZED="true"
-          fi
-
-          # Get issue number based on event type
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            ISSUE_NUMBER="${{ github.event.inputs.issue_number }}"
-          else
-            ISSUE_NUMBER="${{ github.event.issue.number }}"
-          fi
-
-          echo "is-authorized=$IS_AUTHORIZED" >> $GITHUB_OUTPUT
-          echo "issue-number=$ISSUE_NUMBER" >> $GITHUB_OUTPUT
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let isAuthorized = false;
+            let issueNumber = null;
+            
+            // Check if user is authorized
+            if ('${{ github.actor }}' === 'yugasun' || '${{ github.event_name }}' === 'issues') {
+              isAuthorized = true;
+            }
+            
+            // Get issue number based on event type
+            if ('${{ github.event_name }}' === 'workflow_dispatch') {
+              issueNumber = parseInt('${{ github.event.inputs.issue_number }}', 10);
+            } else {
+              issueNumber = context.payload.issue?.number;
+            }
+            
+            // Set outputs using core module
+            core.setOutput('is-authorized', isAuthorized ? 'true' : 'false');
+            core.setOutput('issue-number', issueNumber);
+            
+            // Log status
+            console.log(`Authorization: ${isAuthorized ? 'Approved' : 'Denied'}, Issue #${issueNumber}`);
 
       - name: Post unauthorized message
         if: steps.auth.outputs.is-authorized == 'false'
@@ -78,22 +84,57 @@ jobs:
               body: unauthorizedMessage
             }).catch(error => console.log(`Error posting comment: ${error.message}`));
 
-      # Proceed only if authorized and issue meets criteria
       - name: Verify issue eligibility
         id: verify
         if: steps.auth.outputs.is-authorized == 'true'
-        run: |
-          IS_ELIGIBLE="false"
-
-          if [ "${{ github.event_name }}" == "workflow_dispatch" ]; then
-            IS_ELIGIBLE="true"
-          elif [ "${{ github.event_name }}" == "issues" ] && 
-               ( ${{ contains(github.event.issue.labels.*.name, 'hubsync') }} || 
-                 ${{ contains(github.event.issue.title, '[hubsync]') }} ); then
-            IS_ELIGIBLE="true"
-          fi
-
-          echo "is-eligible=$IS_ELIGIBLE" >> $GITHUB_OUTPUT
+        uses: actions/github-script@v7
+        with:
+          script: |
+            let isEligible = false;
+            const issueNumber = parseInt('${{ steps.auth.outputs.issue-number }}', 10);
+            
+            // For workflow dispatch events, always eligible
+            if ('${{ github.event_name }}' === 'workflow_dispatch') {
+              isEligible = true;
+            } 
+            // For issue events, check if it has the correct label or title prefix
+            else if ('${{ github.event_name }}' === 'issues') {
+              const issue = context.payload.issue;
+              const hasHubsyncLabel = issue.labels?.some(label => label.name === 'hubsync') || false;
+              const hasTitlePrefix = issue.title?.includes('[hubsync]') || false;
+              
+              isEligible = hasHubsyncLabel || hasTitlePrefix;
+            }
+            
+            core.setOutput('is-eligible', isEligible ? 'true' : 'false');
+            console.log(`Issue #${issueNumber} eligibility: ${isEligible ? 'Eligible' : 'Not eligible'}`);
+            
+            // If not eligible but authorized, add a comment explaining why
+            if (!isEligible && '${{ github.event_name }}' === 'issues') {
+              await github.rest.issues.createComment({
+                issue_number: issueNumber,
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                body: `## ℹ️ Issue Not Processed
+                
+                This issue was not processed because it doesn't include the required \`hubsync\` label or \`[hubsync]\` in the title.
+                
+                To process this issue, either:
+                - Add the \`hubsync\` label to this issue
+                - Edit the title to include \`[hubsync]\`
+                
+                The issue body should contain valid JSON with the following format:
+                \`\`\`json
+                {
+                  "hubsync": [
+                    "image1",
+                    "image2"
+                  ]
+                }
+                \`\`\`
+                `
+              }).catch(error => console.log(`Error posting eligibility comment: ${error.message}`));
+            }
 
       - name: Checkout code
         if: steps.verify.outputs.is-eligible == 'true'
@@ -116,7 +157,7 @@ jobs:
         uses: actions/github-script@v7
         with:
           script: |
-            const issueNumber = ${{ steps.auth.outputs.issue-number }};
+            const issueNumber = parseInt('${{ steps.auth.outputs.issue-number }}', 10);
             let issueBody = '';
             
             // Get issue body based on event type
@@ -135,25 +176,53 @@ jobs:
               }
             } else {
               // For issue events, use the event payload
-              issueBody = '${{ github.event.issue.body }}' || '';
+              issueBody = context.payload.issue?.body || '';
             }
             
-            // Try to extract JSON format
+            // Try to extract JSON format with improved parsing
             let content = '';
             let status = 'invalid';
             
             try {
-              // Look for content between curly braces
-              const match = issueBody.match(/{[\s\S]*?}/);
-              if (match) {
-                const jsonContent = match[0];
-                // Validate that it's proper JSON
+              // First try to find any JSON-like structure 
+              let jsonContent = '';
+              
+              // Method 1: Try to match content between curly braces
+              const bracesMatch = issueBody.match(/{[\s\S]*?}/);
+              if (bracesMatch) {
+                jsonContent = bracesMatch[0];
+              } 
+              // Method 2: Try to find content with "hubsync" anywhere in the text
+              else {
+                const hubsyncMatch = issueBody.match(/[\s\S]*?hubsync[\s\S]*?\[[\s\S]*?\][\s\S]*/);
+                if (hubsyncMatch) {
+                  // Try to extract just enough to make valid JSON
+                  const potentialJson = hubsyncMatch[0].trim();
+                  jsonContent = potentialJson;
+                  
+                  // If it doesn't look like valid JSON, try to wrap it
+                  if (!potentialJson.startsWith('{')) {
+                    jsonContent = `{ "hubsync": ${potentialJson.includes('[') ? potentialJson.substring(potentialJson.indexOf('['), potentialJson.indexOf(']') + 1) : '[]'} }`;
+                  }
+                }
+              }
+              
+              // Try to parse the extracted content
+              if (jsonContent) {
+                // Handle badly formatted quotes and escape characters
+                jsonContent = jsonContent
+                  .replace(/'/g, '"')
+                  .replace(/(\w+):/g, '"$1":');
+                  
                 const parsedContent = JSON.parse(jsonContent);
                 
                 // Validate expected format
                 if (parsedContent && Array.isArray(parsedContent.hubsync)) {
                   content = JSON.stringify(parsedContent);
                   status = 'valid';
+                  
+                  // Log what we found
+                  console.log(`Found valid hubsync config with ${parsedContent.hubsync.length} images`);
                 } else {
                   throw new Error('JSON format is invalid; "hubsync" array property is required');
                 }
